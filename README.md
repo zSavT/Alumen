@@ -191,8 +191,8 @@ In questo caso lo script, proverà a continuare l'esecuzione interrotta manualme
 
 # ❗ Note Importanti
 
-- **Quota API**: Usa `--rpm` per evitare superamento i limiti impostati da [Gemini](https://ai.google.dev/gemini-api/docs/rate-limits?hl=it#free-tier).
-- **Ripresa**: Funziona bene se i file non vengono modificati tra le sessioni
-- **Errori API Persistenti**: In caso di fallimenti continui, lo script entra in loop infinito senza alcun avviso o nota, per un possibile utilizzo in un server, finche le quote delle API non vengono resettate. Per un uso quotidiano/causale, si consiglia di interrompere lo script con `CTRL + C` e successivamente riprendere con `--resume` per continuare dove lo script ha operato come ultima operazione.
+- **Quota API**: Usa `--rpm` per evitare il superamento i limiti impostati da [Gemini](https://ai.google.dev/gemini-api/docs/rate-limits?hl=it#free-tier).
+- **Ripresa**: Funziona bene se i file non vengono modificati tra le sessioni.
+- **Errori API Persistenti**: In caso di fallimenti continui, lo script entra in loop infinito senza alcun avviso o nota, per un possibile utilizzo in un server, finche le quote delle API non vengono resettate. Per un uso quotidiano/causale, si consiglia di interrompere lo script con `CTRL + C` e successivamente riprendere con `--resume` per continuare dove lo script ha operato come ultima traduzione.
 
 
