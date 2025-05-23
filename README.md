@@ -2,14 +2,12 @@
 
 **Alumen** è uno script Python da riga di comando progettato per automatizzare la traduzione di grandi quantità di testi contenuti in file CSV. Sfrutta i modelli linguistici di Google Gemini per fornire traduzioni accurate e contestualizzate, con un focus su flessibilità e robustezza.
 
-
-
 ## Indice
 
 - [Alumen](#alumen)
   - [Indice](#indice)
-  - [✅ Funzionalità Principali](#-funzionalità-principali)
-  - [🔧 Prerequisiti - Installazione e Configurazione](#-prerequisiti---installazione-e-configurazione)
+  - [Funzionalità Principali](#funzionalità-principali)
+  - [Prerequisiti - Installazione e Configurazione](#prerequisiti---installazione-e-configurazione)
 - [Utilizzo](#utilizzo)
     - [Argomenti da Riga di Comando](#argomenti-da-riga-di-comando)
       - [Configurazione API e Modello](#configurazione-api-e-modello)
@@ -27,9 +25,7 @@
 - [❗ Note Importanti](#-note-importanti)
 
 
-
-
-## ✅ Funzionalità Principali
+## Funzionalità Principali
 
 - Traduzione automatica da CSV
 - Ricerca Ricorsiva nella cartella di input dei file da tradurre
@@ -42,7 +38,7 @@
 - Ripresa esecuzione da un lavoro interrotto
 - Alta configurazione
 
-## 🔧 Prerequisiti - Installazione e Configurazione
+## Prerequisiti - Installazione e Configurazione
 Prerequisiti:
 - [Python](https://www.python.org/downloads/) 3.11 o superiore
 - Libreria `google-generativeai`
@@ -97,6 +93,7 @@ Tabella flag disponibili:
 | `--enable-file-log`         | Salva log su file `log.txt`                                | Nessuno                     | `--enable-file-log`                                           |
 | `--interactive`             | Abilita modalità interattiva da tastiera durante esecuzione| Nessuno                     | `--interactive`                                               |
 | `--resume`                  | Riprende esecuzione da un punto interrotto                 | Nessuno                     | `--resume`                                                    |
+| `--rotate-on-limit-or-error`| Quando api va in errore o rpm termina, passa api successiva| Nessuno                     | `--rotate-on-limit-or-error`                                  |
 
 
 
@@ -124,6 +121,7 @@ Tabella flag disponibili:
 - `--translation-only-output`: Output in formato `.txt` con sole traduzioni
 - `--rpm`: Limite richieste/minuto (maggior info [qui](https://ai.google.dev/gemini-api/docs/rate-limits?hl=it))
 
+
 #### A Capo Automatico (Word Wrapping)
 
 - `--wrap-at`: Numero massimo caratteri per riga
@@ -135,7 +133,7 @@ Tabella flag disponibili:
 - `--enable-file-log`: Abilita logging su file
 - `--interactive`: Abilita comandi runtime da tastiera
 - `--resume`: Riprende sessioni interrotte
-
+- `--rotate-on-limit-or-error`:  Quando api raggiunge il limite di rpm impostati o restituisce un messaggio di errore quota, si passa successivamente all'api successiva se disponibile per ottimizzare le tempistiche di elaborazione.
 
 
 ## Modalità Interattiva
@@ -150,13 +148,11 @@ Con `--interactive`, è possibile inserire comandi durante l’esecuzione:
 - `exit` / `quit`: Termina l’interfaccia interattiva
 
 
-
 ## Ripresa delle Traduzioni (`--resume`)
 
 Alumen può riprendere file interrotti:
 - In CSV: Skippa righe già tradotte
 - In `.txt` (`--translation-only-output`): Skippa righe corrispondenti
-
 
 
 ## Logging
@@ -168,7 +164,6 @@ Con `--enable-file-log`, viene generato `log.txt` che include:
 - File elaborati e tempi
 - Errori API (senza dati sensibili)
 - Comandi da modalità interattiva
-
 
 
 ## Esempi di Utilizzo
