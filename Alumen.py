@@ -14,13 +14,13 @@ from datetime import datetime
 # ----- Costanti Globali -----
 MAX_RETRIES_PER_API_CALL = 3            # Tentativi per ogni richiesta con API
 MAX_MAJOR_FAILURES_THRESHOLD = 6        # Numero massimo di fallimenti prima del passaggio ad nuova API
-DEFAULT_MODEL_NAME = "gemini-2.5-flash" # Modello Gemini predefinito
+DEFAULT_MODEL_NAME = "gemini-2.0-flash" # Modello Gemini predefinito
 LOG_FILE_NAME = "log.txt"               # Nome file log
 DEFAULT_API_ERROR_RETRY_SECONDS = 10    # Numero di secondi di attesa tra una chiamata all'API se non impostato RPM o l'errore dell'api non suggerisce un delay
 BASE_API_CALL_INTERVAL_SECONDS = 0.2    # Pausa minima tra chiamate API, l'RPM gestisce il resto
 
 # ----- Variabili Globali -----
-available_api_keys = []      # Lista API Caricate
+available_api_keys = []      # Lista API CaricateI
 current_api_key_index = 0    # Indice api attiva
 major_failure_count = 0      # Contatore per fallimenti API con la stessa chiave
 model = None                 # Modello Gemini
@@ -47,7 +47,7 @@ ALUMEN_ASCII_ART = """
 ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░     ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░
 ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░     ░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓█▓▒░      ░▒▓█▓▒░░▒▓█▓▒░
 ░▒▓█▓▒░░▒▓█▓▒░▒▓████████▓▒░▒▓██████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░▒▓████████▓▒░▒▓█▓▒░░▒▓█▓▒░
-   Traductor Automatico Multilingua potenziato da Gemini
+   Traduttore Automatico Multilingua potenziato da Gemini
 """
 
 def get_script_args_updated():

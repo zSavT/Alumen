@@ -75,7 +75,7 @@ Tabella flag disponibili:
 | Nome flag                    | Descrizione                                                | Valore di default           | Esempio di utilizzo                                             |
 |-----------------------------|------------------------------------------------------------|-----------------------------|-----------------------------------------------------------------|
 | `--api`                     | API key (una o più, separate da virgola)                   | Nessuno                     | `--api MIA_KEY1,MIA_KEY2`                                     |
-| `--model-name`              | Modello Gemini da usare                                   | `gemini-2.5-flash`          | `--model-name gemini-pro`                                     |
+| `--model-name`              | Modello Gemini da usare                                   | `gemini-2.0-flash`          | `--model-name gemini-pro`                                     |
 | `--input`                   | Percorso cartella CSV                                      | `input`                     | `--input ./miei_csv`                                          |
 | `--delimiter`               | Delimitatore CSV                                           | `,`                         | `--delimiter ;`                                               |
 | `--translate-col`           | Indice colonna da tradurre (parte da 0 o 1)                | `3`                         | `--translate-col 2`                                           |
@@ -102,7 +102,7 @@ Tabella flag disponibili:
 #### Configurazione API e Modello
 
 - `--api`: API key (singola o multiple, separate da virgola)
-- `--model-name`: Modello Gemini da usare (`gemini-2.5-flash` default)
+- `--model-name`: Modello Gemini da usare (`gemini-2.0-flash` default)
 
 #### Input/Output e Formato CSV
 
