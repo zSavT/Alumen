@@ -630,7 +630,7 @@ def traduci_testo_csv(input_file, output_file, current_script_args):
                         for attempt_idx in range(MAX_RETRIES_PER_API_CALL):
                             try:
                                 wait_for_rpm_limit()
-                                prompt_text = f"""Traduci il seguente testo da {params["source_lang"]} a {params["target_lang"]}, mantenendo il contesto del gioco '{params["game_name"]}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali. Rispondi solo con la traduzione diretta.
+                                prompt_text = f"""Traduci il seguente testo da {params["source_lang"]} a {params["target_lang"]}, mantenendo il contesto del gioco '{params["game_name"]}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile. Rispondi solo con la traduzione diretta.
 Testo originale:
 {value_to_translate_original}
 
