@@ -86,7 +86,9 @@ def get_script_args_updated():
     translation_group.add_argument("--target-lang", type=str, default="italiano",
                         help="Lingua di destinazione per la traduzione (es. 'italiano', 'spagnolo').\nDefault: 'italiano'")
     translation_group.add_argument("--prompt-context", type=str, default=None,
-                        help="Aggiunge un'informazione contestuale extra al prompt inviato a Gemini (es. 'Traduci in modo informale').\nDefault: Nessuno")
+                        help="Aggiunge un'informazione contestuale extra al prompt inviato a Gemini (es. 'Traduci in modo formale').\nDefault: Nessuno")
+    translation_group.add_argument("--custom-prompt", type=str, default=None,
+                        help="Usa un prompt completamente personalizzato, ignorando --source-lang, --target-lang, --game-name e --prompt-context.\nÈ OBBLIGATORIO includere il placeholder '{text_to_translate}' che verrà sostituito con il testo da tradurre.")
     translation_group.add_argument("--translation-only-output", action="store_true",
                         help="Se specificato, il file di output conterrà unicamente i testi tradotti,\nuno per riga. Altrimenti, verrà creata una copia del CSV con la traduzione inserita.")
     translation_group.add_argument("--rpm", type=int, default=None,
@@ -537,6 +539,7 @@ def traduci_testo_csv(input_file, output_file, current_script_args):
         "source_lang": current_script_args.source_lang,
         "target_lang": current_script_args.target_lang,
         "prompt_context": current_script_args.prompt_context,
+        "custom_prompt": current_script_args.custom_prompt,
         "translation_only": current_script_args.translation_only_output,
         "wrap_at": current_script_args.wrap_at,
         "newline_char": current_script_args.newline_char,
@@ -556,10 +559,9 @@ def traduci_testo_csv(input_file, output_file, current_script_args):
                 csv_writer = csv.writer(outfile_handle, delimiter=params["delimiter"], quoting=csv.QUOTE_MINIMAL)
 
             input_header = next(reader, None)
-            if input_header:
-                righe_lette_total += 1
-                if csv_writer and output_open_mode == 'w':
-                    csv_writer.writerow(input_header)
+            righe_lette_total = 1 if input_header else 0
+            if csv_writer and output_open_mode == 'w' and input_header:
+                csv_writer.writerow(input_header)
 
             current_data_row_idx_processed = 0
             current_translatable_lines_proc = 0
@@ -577,8 +579,7 @@ def traduci_testo_csv(input_file, output_file, current_script_args):
 
                 righe_lette_total +=1
                 display_row_number = row_number_in_data + 1 + (1 if input_header else 0)
-                translated_row_content = list(row_data)
-
+                
                 if current_script_args.resume and os.path.exists(output_file):
                     if not params["translation_only"]:
                         if current_data_row_idx_processed < skip_input_data_rows_count:
@@ -607,6 +608,14 @@ def traduci_testo_csv(input_file, output_file, current_script_args):
 
                 if determine_if_translatable(value_to_translate_original):
                     righe_elaborate_per_traduzione +=1
+
+                    if params["custom_prompt"] and "{text_to_translate}" not in params["custom_prompt"]:
+                        error_msg = f"ERRORE: Il prompt personalizzato non include il placeholder obbligatorio '{{text_to_translate}}'. Riga {display_row_number} saltata."
+                        print(f"    - ❌ {error_msg}")
+                        write_to_log(f"{error_msg} (File: {nome_file_corrente_abs})")
+                        write_row_to_output(outfile_handle, csv_writer, row_data, params["translation_only"], value_to_translate_original if not params["translation_only"] else "", params["output_col"])
+                        continue # Salta alla prossima riga del file CSV
+                    
                     current_col_name = input_header[params["translate_col"]] if input_header and params["translate_col"] < len(input_header) else str(params["translate_col"]+1)
                     translated_text_output = ""
                     translation_successful_for_this_text = False
@@ -633,14 +642,14 @@ def traduci_testo_csv(input_file, output_file, current_script_args):
                         for attempt_idx in range(MAX_RETRIES_PER_API_CALL):
                             try:
                                 wait_for_rpm_limit()
-                                prompt_base = f"""Traduci il seguente testo da {params["source_lang"]} a {params["target_lang"]}, mantenendo il contesto del gioco '{params["game_name"]}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
-
-                                if params["prompt_context"]:
-                                    prompt_base += f"\nIstruzione aggiuntiva: {params['prompt_context']}."
-
-                                prompt_base += "\nRispondi solo con la traduzione diretta."
-
-                                prompt_text = f"""{prompt_base}
+                                if params["custom_prompt"]:
+                                    prompt_text = params["custom_prompt"].format(text_to_translate=value_to_translate_original)
+                                else:
+                                    prompt_base = f"""Traduci il seguente testo da {params["source_lang"]} a {params["target_lang"]}, mantenendo il contesto del gioco '{params["game_name"]}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
+                                    if params["prompt_context"]:
+                                        prompt_base += f"\nIstruzione aggiuntiva: {params['prompt_context']}."
+                                    prompt_base += "\nRispondi solo con la traduzione diretta."
+                                    prompt_text = f"""{prompt_base}
 Testo originale:
 {value_to_translate_original}
 
@@ -701,10 +710,10 @@ Traduzione in {params["target_lang"]}:"""
                                 print(f"    Attesa: Pausa 15s prima di ritentare con Key ...{active_key_short}...")
                                 time.sleep(15)
                     
-                    write_row_to_output(outfile_handle, csv_writer, translated_row_content, params["translation_only"], translated_text_output, params["output_col"])
+                    write_row_to_output(outfile_handle, csv_writer, row_data, params["translation_only"], translated_text_output, params["output_col"])
 
                 else:
-                    write_row_to_output(outfile_handle, csv_writer, translated_row_content, params["translation_only"], value_to_translate_original if not params["translation_only"] else "", params["output_col"])
+                    write_row_to_output(outfile_handle, csv_writer, row_data, params["translation_only"], value_to_translate_original if not params["translation_only"] else "", params["output_col"])
 
 
                 if determine_if_translatable(value_to_translate_original):
@@ -741,6 +750,11 @@ def traduci_tutti_csv_in_cartella_ricorsivo(current_script_args):
     wrap_str = f"A capo a {current_script_args.wrap_at} con '{repr(current_script_args.newline_char)}'" if current_script_args.wrap_at and current_script_args.wrap_at > 0 else "Nessuno"
     rpm_str = f"{current_script_args.rpm}richieste/minuto" if current_script_args.rpm and current_script_args.rpm > 0 else "Nessun limite RPM script"
     rotate_on_limit_str = 'Sì' if current_script_args.rotate_on_limit_or_error else 'No'
+    custom_prompt_summary_str = 'Non usato'
+    if current_script_args.custom_prompt:
+        prompt_preview = (current_script_args.custom_prompt[:70] + '...') if len(current_script_args.custom_prompt) > 70 else current_script_args.custom_prompt
+        custom_prompt_summary_str = f"Sì: '{prompt_preview}'"
+
 
     config_summary_str = (
         f"------------------------------------------------------------\n"
@@ -751,10 +765,11 @@ def traduci_tutti_csv_in_cartella_ricorsivo(current_script_args):
         f"  Colonna Testo Tradotto:   {current_script_args.output_col} (per output CSV)\n"
         f"  Encoding File:            '{current_script_args.encoding}'\n"
         f"  Modello Gemini:           '{current_script_args.model_name}'\n"
-        f"  Contesto Gioco:           '{current_script_args.game_name}'\n"
-        f"  Lingua Originale:         '{current_script_args.source_lang}'\n"
-        f"  Lingua Destinazione:      '{current_script_args.target_lang}'\n"
-        f"  Contesto Prompt Extra:    '{current_script_args.prompt_context if current_script_args.prompt_context else 'Nessuno'}'\n"
+        f"  Contesto Gioco:           '{current_script_args.game_name}' (ignorato se si usa --custom-prompt)\n"
+        f"  Lingua Originale:         '{current_script_args.source_lang}' (ignorato se si usa --custom-prompt)\n"
+        f"  Lingua Destinazione:      '{current_script_args.target_lang}' (ignorato se si usa --custom-prompt)\n"
+        f"  Contesto Prompt Extra:    '{current_script_args.prompt_context if current_script_args.prompt_context else 'Nessuno'}' (ignorato se si usa --custom-prompt)\n"
+        f"  Prompt Personalizzato:    {custom_prompt_summary_str}\n"
         f"  Max Richieste/Minuto:     {rpm_str}\n"
         f"  Rotazione API su Lim/Err: {rotate_on_limit_str}\n"
         f"  Modalità Output File:     '{output_mode_str}'\n"
