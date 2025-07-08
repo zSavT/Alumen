@@ -2,19 +2,19 @@ import time
 import google.generativeai as genai
 import csv
 import os
-import re 
+import re
 import argparse
 import itertools
 import sys
-import threading 
-from threading import Thread, Event, Lock 
+import threading
+from threading import Thread, Event, Lock
 import textwrap
-from datetime import datetime 
+from datetime import datetime
 
 # ----- Costanti Globali -----
 MAX_RETRIES_PER_API_CALL = 3            # Tentativi per ogni richiesta con API
 MAX_MAJOR_FAILURES_THRESHOLD = 6        # Numero massimo di fallimenti prima del passaggio ad nuova API
-DEFAULT_MODEL_NAME = "gemini-2.0-flash" # Modello Gemini predefinito
+DEFAULT_MODEL_NAME = "gemini-2.5-flash" # Modello Gemini predefinito
 LOG_FILE_NAME = "log.txt"               # Nome file log
 DEFAULT_API_ERROR_RETRY_SECONDS = 10    # Numero di secondi di attesa tra una chiamata all'API se non impostato RPM o l'errore dell'api non suggerisce un delay
 BASE_API_CALL_INTERVAL_SECONDS = 0.2    # Pausa minima tra chiamate API, l'RPM gestisce il resto
@@ -85,6 +85,8 @@ def get_script_args_updated():
                         help="Lingua originale del testo da tradurre (es. 'inglese', 'giapponese').\nDefault: 'inglese'")
     translation_group.add_argument("--target-lang", type=str, default="italiano",
                         help="Lingua di destinazione per la traduzione (es. 'italiano', 'spagnolo').\nDefault: 'italiano'")
+    translation_group.add_argument("--prompt-context", type=str, default=None,
+                        help="Aggiunge un'informazione contestuale extra al prompt inviato a Gemini (es. 'Traduci in modo informale').\nDefault: Nessuno")
     translation_group.add_argument("--translation-only-output", action="store_true",
                         help="Se specificato, il file di output conterrà unicamente i testi tradotti,\nuno per riga. Altrimenti, verrà creata una copia del CSV con la traduzione inserita.")
     translation_group.add_argument("--rpm", type=int, default=None,
@@ -534,6 +536,7 @@ def traduci_testo_csv(input_file, output_file, current_script_args):
         "game_name": current_script_args.game_name,
         "source_lang": current_script_args.source_lang,
         "target_lang": current_script_args.target_lang,
+        "prompt_context": current_script_args.prompt_context,
         "translation_only": current_script_args.translation_only_output,
         "wrap_at": current_script_args.wrap_at,
         "newline_char": current_script_args.newline_char,
@@ -630,7 +633,14 @@ def traduci_testo_csv(input_file, output_file, current_script_args):
                         for attempt_idx in range(MAX_RETRIES_PER_API_CALL):
                             try:
                                 wait_for_rpm_limit()
-                                prompt_text = f"""Traduci il seguente testo da {params["source_lang"]} a {params["target_lang"]}, mantenendo il contesto del gioco '{params["game_name"]}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile. Rispondi solo con la traduzione diretta.
+                                prompt_base = f"""Traduci il seguente testo da {params["source_lang"]} a {params["target_lang"]}, mantenendo il contesto del gioco '{params["game_name"]}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
+
+                                if params["prompt_context"]:
+                                    prompt_base += f"\nIstruzione aggiuntiva: {params['prompt_context']}."
+
+                                prompt_base += "\nRispondi solo con la traduzione diretta."
+
+                                prompt_text = f"""{prompt_base}
 Testo originale:
 {value_to_translate_original}
 
@@ -744,6 +754,7 @@ def traduci_tutti_csv_in_cartella_ricorsivo(current_script_args):
         f"  Contesto Gioco:           '{current_script_args.game_name}'\n"
         f"  Lingua Originale:         '{current_script_args.source_lang}'\n"
         f"  Lingua Destinazione:      '{current_script_args.target_lang}'\n"
+        f"  Contesto Prompt Extra:    '{current_script_args.prompt_context if current_script_args.prompt_context else 'Nessuno'}'\n"
         f"  Max Richieste/Minuto:     {rpm_str}\n"
         f"  Rotazione API su Lim/Err: {rotate_on_limit_str}\n"
         f"  Modalità Output File:     '{output_mode_str}'\n"
