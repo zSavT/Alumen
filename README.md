@@ -75,14 +75,19 @@ Tabella flag disponibili:
 | Nome flag                    | Descrizione                                                | Valore di default           | Esempio di utilizzo                                             |
 |-----------------------------|------------------------------------------------------------|-----------------------------|-----------------------------------------------------------------|
 | `--api`                     | API key (una o più, separate da virgola)                   | Nessuno                     | `--api MIA_KEY1,MIA_KEY2`                                     |
-| `--model-name`              | Modello Gemini da usare                                   | `gemini-2.0-flash`          | `--model-name gemini-pro`                                     |
+| `--model-name`              | Modello Gemini da usare                                   | `gemini-2.5-flash`          | `--model-name gemini-pro`                                     |
 | `--input`                   | Percorso cartella CSV                                      | `input`                     | `--input ./miei_csv`                                          |
 | `--delimiter`               | Delimitatore CSV                                           | `,`                         | `--delimiter ;`                                               |
 | `--translate-col`           | Indice colonna da tradurre (parte da 0 o 1)                | `3`                         | `--translate-col 2`                                           |
 | `--output-col`              | Indice colonna output tradotto                             | `3`                         | `--output-col 4`                                              |
+| `--file-type`               | Tipo di file da elaborare: 'csv' o 'json'.                 | `csv`                       | `--file-type json`                                            |
+| `--match-full-json-path`    | [Solo JSON] Per le chiavi JSON, richiede la corrispondenza del percorso completo della chiave (es. 'parent.child.key'), invece del solo nome della chiave.                             | Nessuno (opzionale)         | `--match-full-json-path`                                                |
+| `--json-keys`                | [Solo JSON, Obbligatorio] Elenco di chiavi (separate da virgola) da tradurre.                         | Nessuno                     | `--json-keys "name,description,item.lore"`                                       |
 | `--max-cols`                | Numero massimo colonne ammesse                             | Nessuno (opzionale)         | `--max-cols 5`                                                |
 | `--encoding`                | Codifica file in lettura/scrittura                         | `utf-8`                     | `--encoding iso-8859-1`                                       |
 | `--game-name`               | Contesto specifico per il tono/termini della traduzione    | `un videogioco generico`    | `--game-name "The Witcher 3"`                                |
+| `--prompt-context`          | Aggiunge un'informazione contestuale extra al prompt.      | Nessuno                     | `--prompt-context "Tradurre in un tono medievale."`           |
+| `--custom-prompt`           | Usa un prompt personalizzato. OBBLIGATORIO: includere '{text_to_translate}'.                                     | Nessuno                  | `--custom-prompt "Traduci questo: {text_to_translate} in italiano."`                                      |
 | `--source-lang`             | Lingua sorgente                                            | `inglese`                   | `--source-lang tedesco`                                       |
 | `--target-lang`             | Lingua di destinazione                                     | `italiano`                  | `--target-lang spagnolo`                                      |
 | `--translation-only-output` | Output con solo testo tradotto in `.txt`                   | Nessuno                     | `--translation-only-output`                                   |
@@ -102,16 +107,25 @@ Tabella flag disponibili:
 #### Configurazione API e Modello
 
 - `--api`: API key (singola o multiple, separate da virgola)
-- `--model-name`: Modello Gemini da usare (`gemini-2.0-flash` default)
+- `--model-name`: Modello Gemini da usare (`gemini-2.5-flash` default)
+
+### Configurazione File e Formato
+- `--input`: Percorso della cartella base contenente i file da tradurre. Default: input
+- `--file-type`: Tipo di file da elaborare: 'csv' o 'json'. Default: 'csv'
+- `--encoding`: Codifica caratteri dei file. Default: 'utf-8'
 
 #### Input/Output e Formato CSV
 
-- `--input`: Percorso cartella CSV (default: `input`)
 - `--delimiter`: Delimitatore CSV (default: `,`)
 - `--translate-col`: Colonna da tradurre (default: `3`)
 - `--output-col`: Colonna per output (default: `3`)
 - `--max-cols`: Numero massimo colonne ammesse (opzionale)
-- `--encoding`: Codifica file (default: `utf-8`)
+- `--resume`: Riprende sessioni interrotte
+
+#### Input/Output e Formato JSON
+
+- `--json-keys`: Elenco di chiavi (separate da virgola) da tradurre. Supporta notazione a punto per chiavi annidate (es. 'key1,path.to.key2'). Obbligatorio per `--file-type json`.
+- `--match-full-json-path`: Per le chiavi JSON, richiede la corrispondenza del percorso completo della chiave (es. 'parent.child.key'), invece del solo nome della chiave.
 
 #### Parametri di Traduzione
 
@@ -120,7 +134,8 @@ Tabella flag disponibili:
 - `--target-lang`: Lingua di destinazione (default: `italiano`)
 - `--translation-only-output`: Output in formato `.txt` con sole traduzioni
 - `--rpm`: Limite richieste/minuto (maggior info [qui](https://ai.google.dev/gemini-api/docs/rate-limits?hl=it))
-
+- `--prompt-context`: Aggiunge un'informazione contestuale extra al prompt.
+- `--custom-prompt`:  Usa un prompt personalizzato. OBBLIGATORIO: includere '{text_to_translate}'.
 
 #### A Capo Automatico (Word Wrapping)
 
@@ -132,7 +147,6 @@ Tabella flag disponibili:
 - `--oneThread`: Disabilita animazione caricamento
 - `--enable-file-log`: Abilita logging su file
 - `--interactive`: Abilita comandi runtime da tastiera
-- `--resume`: Riprende sessioni interrotte
 - `--rotate-on-limit-or-error`:  Quando api raggiunge il limite di rpm impostati o restituisce un messaggio di errore quota, si passa successivamente all'api successiva se disponibile per ottimizzare le tempistiche di elaborazione.
 
 
