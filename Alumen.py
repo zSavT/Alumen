@@ -67,25 +67,21 @@ def get_script_args_updated():
     wrapping_group = parser.add_argument_group('\033[96mOpzioni A Capo Automatico (Word Wrapping)\033[0m')
     utility_group = parser.add_argument_group('\033[96mUtilità e Modalità Interattiva\033[0m')
 
-    # Configurazione API
     api_group.add_argument("--api", type=str, help="\033[97mSpecifica una o più chiavi API Google Gemini, separate da virgola.\033[0m")
     api_group.add_argument("--model-name", type=str, default=DEFAULT_MODEL_NAME, help=f"\033[97mNome del modello Gemini da utilizzare. Default: '{DEFAULT_MODEL_NAME}'\033[0m")
 
-    # Configurazione File
     file_format_group.add_argument("--input", type=str, default="input", help="\033[97mPercorso della cartella base contenente i file da tradurre. Default: 'input'\033[0m")
     file_format_group.add_argument("--file-type", type=str, default="csv", choices=['csv', 'json'], help="\033[97mTipo di file da elaborare: 'csv' o 'json'. Default: 'csv'\033[0m")
     file_format_group.add_argument("--encoding", type=str, default="utf-8", help="\033[97mCodifica caratteri dei file. Default: 'utf-8'\033[0m")
 
-    # Opzioni CSV
     csv_options_group.add_argument("--delimiter", type=str, default=",", help="\033[97m[Solo CSV] Carattere delimitatore. Default: ','\033[0m")
     csv_options_group.add_argument("--translate-col", type=int, default=3, help="\033[97m[Solo CSV] Indice (0-based) della colonna da tradurre. Default: 3\033[0m")
     csv_options_group.add_argument("--output-col", type=int, default=3, help="\033[97m[Solo CSV] Indice (0-based) della colonna per il testo tradotto. Default: 3\033[0m")
     csv_options_group.add_argument("--max-cols", type=int, default=None, help="\033[97m[Solo CSV] Numero massimo di colonne attese per riga. Default: Nessun controllo.\033[0m")
     
-    # Opzioni JSON
     json_options_group.add_argument("--json-keys", type=str, default=None, help="\033[97m[Solo JSON, Obbligatorio] Elenco di chiavi (separate da virgola) da tradurre. Supporta notazione a punto per chiavi annidate (es. 'key1,path.to.key2').\033[0m")
+    json_options_group.add_argument("--match-full-json-path", action="store_true", help="\033[97m[Solo JSON] Per le chiavi JSON, richiede la corrispondenza del percorso completo della chiave (es. 'parent.child.key'), invece del solo nome della chiave.\033[0m")
 
-    # Parametri Traduzione
     translation_group.add_argument("--game-name", type=str, default="un videogioco generico", help="\033[97mNome del gioco per contestualizzare la traduzione.\033[0m")
     translation_group.add_argument("--source-lang", type=str, default="inglese", help="\033[97mLingua originale del testo.\033[0m")
     translation_group.add_argument("--target-lang", type=str, default="italiano", help="\033[97mLingua di destinazione.\033[0m")
@@ -94,11 +90,9 @@ def get_script_args_updated():
     translation_group.add_argument("--translation-only-output", action="store_true", help="\033[97mL'output conterrà solo i testi tradotti, uno per riga.\033[0m")
     translation_group.add_argument("--rpm", type=int, default=None, help="\033[97mNumero massimo di richieste API a Gemini per minuto.\033[0m")
 
-    # A Capo Automatico
     wrapping_group.add_argument("--wrap-at", type=int, default=None, help="\033[97mLunghezza massima della riga per a capo automatico.\033[0m")
     wrapping_group.add_argument("--newline-char", type=str, default='\\n', help="\033[97mCarattere da usare per l'a capo automatico.\033[0m")
 
-    # Utilità
     utility_group.add_argument("--oneThread", action="store_true", help="\033[97mDisabilita l'animazione di caricamento.\033[0m")
     utility_group.add_argument("--enable-file-log", action="store_true", help=f"\033[97mAttiva la scrittura di un log ('{LOG_FILE_NAME}').\033[0m")
     utility_group.add_argument("--interactive", action="store_true", help="\033[97mAbilita comandi interattivi.\033[0m")
@@ -305,7 +299,7 @@ def get_translation_from_api(text_to_translate, context_for_log, args):
     if not determine_if_translatable(text_to_translate):
         return text_to_translate
 
-    while True: # Ciclo per gestire la rotazione delle API in caso di fallimento totale
+    while True:
         if args.interactive: check_and_wait_if_paused(context_for_log)
         
         with command_lock:
@@ -322,7 +316,7 @@ def get_translation_from_api(text_to_translate, context_for_log, args):
                 if args.custom_prompt:
                     if "{text_to_translate}" not in args.custom_prompt:
                         print(f"    - ❌ ERRORE: Il prompt personalizzato non include '{{text_to_translate}}'. Salto.")
-                        return text_to_translate # Ritorna il testo originale se il prompt è invalido
+                        return text_to_translate
                     prompt_text = args.custom_prompt.format(text_to_translate=text_to_translate)
                 else:
                     prompt_base = f"""Traduci il seguente testo da {args.source_lang} a {args.target_lang}, mantenendo il contesto del gioco '{args.game_name}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
@@ -337,19 +331,18 @@ def get_translation_from_api(text_to_translate, context_for_log, args):
                 if args.wrap_at and args.wrap_at > 0:
                     translated_text = textwrap.fill(translated_text, width=args.wrap_at, newline=args.newline_char, replace_whitespace=False)
                 
-                major_failure_count = 0 # Resetta i fallimenti in caso di successo
+                major_failure_count = 0
                 return translated_text
 
             except Exception as api_exc:
                 if args.rotate_on_limit_or_error:
                     if rotate_api_key(reason_override=f"Errore API"):
-                        break # Esce dal ciclo for dei tentativi per riprovare con la nuova chiave
+                        break
                 
                 retry_delay = handle_api_error(api_exc, context_for_log, active_key_short, attempt_idx)
                 if attempt_idx < MAX_RETRIES_PER_API_CALL - 1:
                     time.sleep(retry_delay)
         
-        # Se tutti i tentativi falliscono per una chiave
         major_failure_count += 1
         print(f"    - Fallimento definitivo con Key ...{active_key_short}. Conteggio fallimenti: {major_failure_count}/{MAX_MAJOR_FAILURES_THRESHOLD}")
         
@@ -374,50 +367,90 @@ def traduci_testo_json(input_file, output_file, args):
     keys_to_translate = {k.strip() for k in args.json_keys.split(',')}
     translated_texts_for_only_output = []
     texts_to_translate_count = 0
-
-    # Funzione ricorsiva per contare i testi traducibili
-    def count_translatable_items(obj, path=""):
-        nonlocal texts_to_translate_count
-        if isinstance(obj, dict):
-            for key, value in obj.items():
-                current_path = f"{path}.{key}" if path else key
-                if current_path in keys_to_translate and determine_if_translatable(value):
-                    texts_to_translate_count += 1
-                else:
-                    count_translatable_items(value, current_path)
-        elif isinstance(obj, list):
-            for item in obj:
-                count_translatable_items(item, path)
-    
-    count_translatable_items(data)
-    print(f"Trovati {texts_to_translate_count} valori da tradurre per le chiavi specificate.")
     processed_count = 0
 
-    def traverse_and_translate(obj, path=""):
-        nonlocal processed_count
-        if isinstance(obj, dict):
-            # Usiamo list(obj.items()) per creare una copia, permettendo la modifica del dizionario durante l'iterazione
-            for key, value in list(obj.items()):
-                current_path = f"{path}.{key}" if path else key
-                if current_path in keys_to_translate and determine_if_translatable(value):
-                    processed_count += 1
-                    context_log = f"JSON '{file_basename}', Chiave: '{current_path}'"
-                    print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path}':")
-                    print(f"    Originale: '{str(value)[:80]}...'")
-                    
-                    translated_value = get_translation_from_api(value, context_log, args)
-                    obj[key] = translated_value
-                    
-                    print(f"    Tradotto:  '{str(translated_value)[:80]}...'")
-                    if args.translation_only_output:
-                        translated_texts_for_only_output.append(translated_value)
-                else:
-                    traverse_and_translate(value, current_path)
-        elif isinstance(obj, list):
-            for item in obj:
-                traverse_and_translate(item, path)
+    if args.match_full_json_path:
+        print("ℹ️  Modalità traduzione JSON con corrispondenza percorso completo abilitata.")
 
-    traverse_and_translate(data)
+        def _count_translatable_items_legacy(obj, path=""):
+            nonlocal texts_to_translate_count
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    current_path = f"{path}.{key}" if path else key
+                    if current_path in keys_to_translate and determine_if_translatable(value):
+                        texts_to_translate_count += 1
+                    _count_translatable_items_legacy(value, current_path) 
+            elif isinstance(obj, list):
+                for item in obj:
+                    _count_translatable_items_legacy(item, path)
+
+        def _traverse_and_translate_legacy(obj, path=""):
+            nonlocal processed_count
+            if isinstance(obj, dict):
+                for key, value in list(obj.items()):
+                    current_path = f"{path}.{key}" if path else key
+                    if current_path in keys_to_translate and determine_if_translatable(value):
+                        processed_count += 1
+                        context_log = f"JSON '{file_basename}', Chiave: '{current_path}'"
+                        print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path}':")
+                        print(f"    Originale: '{str(value)[:80]}...'")
+                        
+                        translated_value = get_translation_from_api(value, context_log, args)
+                        obj[key] = translated_value
+                        
+                        print(f"    Tradotto:  '{str(translated_value)[:80]}...'")
+                        if args.translation_only_output:
+                            translated_texts_for_only_output.append(translated_value)
+                    _traverse_and_translate_legacy(value, current_path) 
+            elif isinstance(obj, list):
+                for item in obj:
+                    _traverse_and_translate_legacy(item, path)
+
+        count_func = _count_translatable_items_legacy
+        translate_func = _traverse_and_translate_legacy
+    else:
+        print("ℹ️  Modalità traduzione JSON con corrispondenza nome chiave (default) abilitata.")
+
+        def _count_translatable_items_new(obj, path=""):
+            nonlocal texts_to_translate_count
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    if key in keys_to_translate and determine_if_translatable(value):
+                        texts_to_translate_count += 1
+                    _count_translatable_items_new(value, f"{path}.{key}" if path else key)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _count_translatable_items_new(item, path)
+
+        def _traverse_and_translate_new(obj, path=""):
+            nonlocal processed_count
+            if isinstance(obj, dict):
+                for key, value in list(obj.items()):
+                    if key in keys_to_translate and determine_if_translatable(value):
+                        processed_count += 1
+                        current_path_for_log = f"{path}.{key}" if path else key
+                        context_log = f"JSON '{file_basename}', Chiave: '{current_path_for_log}'"
+                        print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path_for_log}':")
+                        print(f"    Originale: '{str(value)[:80]}...'")
+                        
+                        translated_value = get_translation_from_api(value, context_log, args)
+                        obj[key] = translated_value
+                        
+                        print(f"    Tradotto:  '{str(translated_value)[:80]}...'")
+                        if args.translation_only_output:
+                            translated_texts_for_only_output.append(translated_value)
+                    _traverse_and_translate_new(value, f"{path}.{key}" if path else key)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _traverse_and_translate_new(item, path)
+        
+        count_func = _count_translatable_items_new
+        translate_func = _traverse_and_translate_new
+
+    count_func(data)
+    print(f"Trovati {texts_to_translate_count} valori da tradurre per le chiavi specificate.")
+    
+    translate_func(data)
 
     try:
         with open(output_file, 'w', encoding=args.encoding) as f:
@@ -484,13 +517,13 @@ def traduci_testo_csv(input_file, output_file, args):
 
 def process_files_recursively(args):
     """Scansiona le cartelle, trova i file e avvia il processo di traduzione corretto."""
+    user_command_skip_file = False
     base_input_dir = args.input
     total_files_found = 0
 
     print(f"\nInizio scansione per file *.{args.file_type} da: '{base_input_dir}'")
     
     for root_dir, dirs_list, files_list in os.walk(base_input_dir):
-        # Evita di entrare nelle cartelle 'tradotto'
         if "tradotto" in dirs_list:
             dirs_list.remove("tradotto")
 
