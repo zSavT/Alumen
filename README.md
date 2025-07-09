@@ -27,7 +27,7 @@
 
 ## Funzionalità Principali
 
-- Traduzione automatica da CSV
+- Traduzione automatica da CSV e JSON
 - Ricerca Ricorsiva nella cartella di input dei file da tradurre
 - Supporto Multi-API Key con Rotazione
 - Controllo delle Richieste per Minuto (RPM)
@@ -36,7 +36,7 @@
 - Modalità Interattiva
 - Logging Dettagliato
 - Ripresa esecuzione da un lavoro interrotto
-- Alta configurazione
+- Alta configurazione prompt
 
 ## Prerequisiti - Installazione e Configurazione
 Prerequisiti:
