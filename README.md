@@ -52,7 +52,12 @@ Download, installazione e configurazione:
 2. **Installa le dipendenze**:
    ```ps1
    pip install google-generativeai
+   pip install argparse_color_formatter
    ```
+  In alternativa, si può utilizzare il comando:
+     ```ps1
+        pip install -r requirements.txt
+    ```
 
 3. **Configura le API key**:
 
