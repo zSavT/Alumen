@@ -43,7 +43,7 @@
 ## Prerequisiti - Installazione e Configurazione
 Prerequisiti:
 - [Python](https://www.python.org/downloads/) 3.11 o superiore
-- Libreria `google-generativeai`
+- Libreria `google-generativeai` e `argparse_color_formatter`
 - Una o più API key valide di [Google Gemini](https://aistudio.google.com/apikey)
 
 Download, installazione e configurazione:
