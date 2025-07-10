@@ -357,7 +357,6 @@ def traduci_testo_json(input_file, output_file, args):
     """Elabora un singolo file JSON."""
     file_basename = os.path.basename(input_file)
     print(f"\n--- Elaborazione JSON: {file_basename} ---")
-    
     try:
         with open(input_file, 'r', encoding=args.encoding) as f:
             data = json.load(f)
@@ -366,103 +365,103 @@ def traduci_testo_json(input_file, output_file, args):
 
     keys_to_translate = {k.strip() for k in args.json_keys.split(',')}
     translated_texts_for_only_output = []
-    texts_to_translate_count = 0
-    processed_count = 0
-
-    if args.match_full_json_path:
-        print("ℹ️  Modalità traduzione JSON con corrispondenza percorso completo abilitata.")
-
-        def _count_translatable_items_legacy(obj, path=""):
-            nonlocal texts_to_translate_count
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    current_path = f"{path}.{key}" if path else key
-                    if current_path in keys_to_translate and determine_if_translatable(value):
-                        texts_to_translate_count += 1
-                    _count_translatable_items_legacy(value, current_path) 
-            elif isinstance(obj, list):
-                for item in obj:
-                    _count_translatable_items_legacy(item, path)
-
-        def _traverse_and_translate_legacy(obj, path=""):
-            nonlocal processed_count
-            if isinstance(obj, dict):
-                for key, value in list(obj.items()):
-                    current_path = f"{path}.{key}" if path else key
-                    if current_path in keys_to_translate and determine_if_translatable(value):
-                        processed_count += 1
-                        context_log = f"JSON '{file_basename}', Chiave: '{current_path}'"
-                        print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path}':")
-                        print(f"    Originale: '{str(value)[:80]}...'")
-                        
-                        translated_value = get_translation_from_api(value, context_log, args)
-                        obj[key] = translated_value
-                        
-                        print(f"    Tradotto:  '{str(translated_value)[:80]}...'")
-                        if args.translation_only_output:
-                            translated_texts_for_only_output.append(translated_value)
-                    _traverse_and_translate_legacy(value, current_path) 
-            elif isinstance(obj, list):
-                for item in obj:
-                    _traverse_and_translate_legacy(item, path)
-
-        count_func = _count_translatable_items_legacy
-        translate_func = _traverse_and_translate_legacy
-    else:
-        print("ℹ️  Modalità traduzione JSON con corrispondenza nome chiave (default) abilitata.")
-
-        def _count_translatable_items_new(obj, path=""):
-            nonlocal texts_to_translate_count
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    if key in keys_to_translate and determine_if_translatable(value):
-                        texts_to_translate_count += 1
-                    _count_translatable_items_new(value, f"{path}.{key}" if path else key)
-            elif isinstance(obj, list):
-                for item in obj:
-                    _count_translatable_items_new(item, path)
-
-        def _traverse_and_translate_new(obj, path=""):
-            nonlocal processed_count
-            if isinstance(obj, dict):
-                for key, value in list(obj.items()):
-                    if key in keys_to_translate and determine_if_translatable(value):
-                        processed_count += 1
-                        current_path_for_log = f"{path}.{key}" if path else key
-                        context_log = f"JSON '{file_basename}', Chiave: '{current_path_for_log}'"
-                        print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path_for_log}':")
-                        print(f"    Originale: '{str(value)[:80]}...'")
-                        
-                        translated_value = get_translation_from_api(value, context_log, args)
-                        obj[key] = translated_value
-                        
-                        print(f"    Tradotto:  '{str(translated_value)[:80]}...'")
-                        if args.translation_only_output:
-                            translated_texts_for_only_output.append(translated_value)
-                    _traverse_and_translate_new(value, f"{path}.{key}" if path else key)
-            elif isinstance(obj, list):
-                for item in obj:
-                    _traverse_and_translate_new(item, path)
-        
-        count_func = _count_translatable_items_new
-        translate_func = _traverse_and_translate_new
-
-    count_func(data)
-    print(f"Trovati {texts_to_translate_count} valori da tradurre per le chiavi specificate.")
     
-    translate_func(data)
-
     try:
-        with open(output_file, 'w', encoding=args.encoding) as f:
-            if args.translation_only_output:
-                for text in translated_texts_for_only_output:
-                    f.write(text + "\n")
-            else:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
+        texts_to_translate_count = 0
+        processed_count = 0
 
-    print(f"--- Completato JSON: {file_basename} ---")
+        if args.match_full_json_path:
+            print("ℹ️  Modalità traduzione JSON con corrispondenza percorso completo abilitata.")
+            def _count_translatable_items_legacy(obj, path=""):
+                nonlocal texts_to_translate_count
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        current_path = f"{path}.{key}" if path else key
+                        if current_path in keys_to_translate and determine_if_translatable(value):
+                            texts_to_translate_count += 1
+                        _count_translatable_items_legacy(value, current_path)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        _count_translatable_items_legacy(item, path)
+
+            def _traverse_and_translate_legacy(obj, path=""):
+                nonlocal processed_count
+                if isinstance(obj, dict):
+                    for key, value in list(obj.items()):
+                        current_path = f"{path}.{key}" if path else key
+                        if current_path in keys_to_translate and determine_if_translatable(value):
+                            processed_count += 1
+                            context_log = f"JSON '{file_basename}', Chiave: '{current_path}'"
+                            print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path}':")
+                            print(f"    Originale: '{str(value)[:80]}...'")
+                            translated_value = get_translation_from_api(value, context_log, args)
+                            obj[key] = translated_value
+                            print(f"    Tradotto:  '{str(translated_value)[:80]}...'")
+                            if args.translation_only_output:
+                                translated_texts_for_only_output.append(translated_value)
+                        _traverse_and_translate_legacy(value, current_path)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        _traverse_and_translate_legacy(item, path)
+            count_func, translate_func = _count_translatable_items_legacy, _traverse_and_translate_legacy
+        else:
+            print("ℹ️  Modalità traduzione JSON con corrispondenza nome chiave (default) abilitata.")
+            def _count_translatable_items_new(obj, path=""):
+                nonlocal texts_to_translate_count
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        if key in keys_to_translate and determine_if_translatable(value):
+                            texts_to_translate_count += 1
+                        _count_translatable_items_new(value, f"{path}.{key}" if path else key)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        _count_translatable_items_new(item, path)
+
+            def _traverse_and_translate_new(obj, path=""):
+                nonlocal processed_count
+                if isinstance(obj, dict):
+                    for key, value in list(obj.items()):
+                        if key in keys_to_translate and determine_if_translatable(value):
+                            processed_count += 1
+                            current_path_for_log = f"{path}.{key}" if path else key
+                            context_log = f"JSON '{file_basename}', Chiave: '{current_path_for_log}'"
+                            print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path_for_log}':")
+                            print(f"    Originale: '{str(value)[:80]}...'")
+                            translated_value = get_translation_from_api(value, context_log, args)
+                            obj[key] = translated_value
+                            print(f"    Tradotto:  '{str(translated_value)[:80]}...'")
+                            if args.translation_only_output:
+                                translated_texts_for_only_output.append(translated_value)
+                        _traverse_and_translate_new(value, f"{path}.{key}" if path else key)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        _traverse_and_translate_new(item, path)
+            count_func, translate_func = _count_translatable_items_new, _traverse_and_translate_new
+
+        count_func(data)
+        print(f"Trovati {texts_to_translate_count} valori da tradurre per le chiavi specificate.")
+        
+        translate_func(data)
+        
+        print(f"--- Completato JSON: {file_basename} ---")
+
+    except KeyboardInterrupt:
+        print(f"\n🛑 INTERRUZIONE UTENTE: Salvataggio dei progressi per il file '{file_basename}' in corso...")
+        write_to_log(f"INTERRUZIONE UTENTE: Salvataggio progressi parziali per JSON '{file_basename}'")
+        raise
+    
+    finally:
+        write_to_log(f"Salvataggio (completo o parziale) in corso per '{file_basename}' in '{output_file}'.")
+        try:
+            with open(output_file, 'w', encoding=args.encoding) as f:
+                if args.translation_only_output:
+                    for text in translated_texts_for_only_output:
+                        f.write(text + "\n")
+                else:
+                    json.dump(data, f, ensure_ascii=False, indent=4)
+            print(f"✅ Salvataggio dati in '{output_file}' completato.")
+        except Exception as e:
+            log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
 
 def traduci_testo_csv(input_file, output_file, args):
     """Elabora un singolo file CSV."""
