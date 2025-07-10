@@ -6,9 +6,10 @@
 
 - [Alumen](#alumen)
   - [Indice](#indice)
-  - [Funzionalità Principali](#funzionalità-principali)
-  - [Prerequisiti - Installazione e Configurazione](#prerequisiti---installazione-e-configurazione)
+- [Funzionalità Principali](#funzionalità-principali)
+- [Storia\\Creazione Progetto](#storiacreazione-progetto)
 - [Utilizzo](#utilizzo)
+  - [Prerequisiti - Installazione e Configurazione](#prerequisiti---installazione-e-configurazione)
     - [Argomenti da Riga di Comando](#argomenti-da-riga-di-comando)
       - [Configurazione API e Modello](#configurazione-api-e-modello)
     - [Configurazione File e Formato](#configurazione-file-e-formato)
@@ -27,7 +28,7 @@
 - [❗ Note Importanti](#-note-importanti)
 
 
-## Funzionalità Principali
+# Funzionalità Principali
 
 - Traduzione automatica da CSV e JSON
 - Ricerca Ricorsiva nella cartella di input dei file da tradurre
@@ -40,39 +41,9 @@
 - Ripresa esecuzione da un lavoro interrotto
 - Alta configurazione prompt
 
-## Prerequisiti - Installazione e Configurazione
-Prerequisiti:
-- [Python](https://www.python.org/downloads/) 3.11 o superiore
-- Libreria `google-generativeai` e `argparse_color_formatter`
-- Una o più API key valide di [Google Gemini](https://aistudio.google.com/apikey)
+# Storia\Creazione Progetto
 
-Download, installazione e configurazione:
-
-1. **Clona la repository**
-2. **Installa le dipendenze**:
-   ```ps1
-   pip install google-generativeai
-   pip install argparse_color_formatter
-   ```
-  In alternativa, si può utilizzare il comando:
-     ```ps1
-        pip install -r requirements.txt
-    ```
-
-3. **Configura le API key**:
-
-   - **Metodo 1: File `api_key.txt` (consigliato)**:
-     ```
-     AIzaSyXXXXXXXXXXXXXXXXXXXX1  
-     AIzaSyXXXXXXXXXXXXXXXXXXXX2  
-     ```
-
-   - **Metodo 2: Flag `--api`**
-     ```ps1
-     python Alumen.py --api TUA_API_KEY_1,TUA_API_KEY_2
-     ```
-
-**Alumen** di base, controlla in modo ricorsivo tutti i file presenti nella cartella *input* (è possibile specificare un diverso percorso tramite l'apposito flag).
+Una primordiale versione dello script, è stata realizzata per la patch in italiano per il gioco [Valkyria Chronicles](https://github.com/zSavT/Valkyria-Chronicles-Patch-ITA.git) che traduceva in automatico i file di testo csv del gioco, al tempo lo script era scritto interamente da zero ed utilizzava le librerie di Google Deepl. Successivamente lo script è mutato per poter supportare la traduzione dei file del gioco [Yakuza 4](https://github.com/zSavT/Yakuza4-Patch-ITA.git), durante il processo di adattamento dello script, il "*motore*" della traduzione è cambiato e si è optato per il più versatile e potente Gemini, ovvero una vera e propria AI. Con il tempo ho optato per distaccare lo script e renderlo il più generico possibile, per adattarlo a qualsiasi tipologia di csv/progetto/gioco e questo grazie anche alla facilità dello stesso Gemini nel potenziamento dello script e della sua adattabilità.
 
 
 # Utilizzo
@@ -107,7 +78,39 @@ Tabella flag disponibili:
 | `--resume`                  | Riprende esecuzione da un punto interrotto                 | Nessuno                     | `--resume`                                                    |
 | `--rotate-on-limit-or-error`| Quando api va in errore o rpm termina, passa api successiva| Nessuno                     | `--rotate-on-limit-or-error`                                  |
 
+## Prerequisiti - Installazione e Configurazione
+Prerequisiti:
+- [Python](https://www.python.org/downloads/) 3.11 o superiore
+- Libreria `google-generativeai` e `argparse_color_formatter`
+- Una o più API key valide di [Google Gemini](https://aistudio.google.com/apikey)
 
+Download, installazione e configurazione:
+
+1. **Clona la repository**
+2. **Installa le dipendenze**:
+   ```ps1
+   pip install google-generativeai
+   pip install argparse_color_formatter
+   ```
+  In alternativa, si può utilizzare il comando:
+     ```ps1
+        pip install -r requirements.txt
+    ```
+
+3. **Configura le API key**:
+
+   - **Metodo 1: File `api_key.txt` (consigliato)**:
+     ```
+     AIzaSyXXXXXXXXXXXXXXXXXXXX1  
+     AIzaSyXXXXXXXXXXXXXXXXXXXX2  
+     ```
+
+   - **Metodo 2: Flag `--api`**
+     ```ps1
+     python Alumen.py --api TUA_API_KEY_1,TUA_API_KEY_2
+     ```
+
+**Alumen** di base, controlla in modo ricorsivo tutti i file presenti nella cartella *input* (è possibile specificare un diverso percorso tramite l'apposito flag).
 
 ### Argomenti da Riga di Comando
 
@@ -207,7 +210,6 @@ In questo caso lo script, è in modalità attiva, quindi sarà possibile effettu
 python Alumen.py --resume --wrap-at 80 --newline-char "<br>"
 ```
 In questo caso lo script, proverà a continuare l'esecuzione interrotta manualmente in un esecuzione precedente e successivamente splitterà il testo tradotto ogni 80 caratteri aggiungedo come "testo a capo", il tag "`<br>`".
-
 
 
 # ❗ Note Importanti
