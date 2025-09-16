@@ -1,2 +1,3 @@
 google.generativeai
 argparse_color_formatter
+polib
