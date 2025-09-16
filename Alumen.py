@@ -28,6 +28,7 @@ major_failure_count = 0      # Contatore per fallimenti API con la stessa chiave
 model = None                 # Modello Gemini
 script_args = None           # Oggetto per gli argomenti passati allo script
 log_file_path = None         # Path file log
+translation_cache = {}       # Dizionario per la cache delle traduzioni
 
 # Gestione RPM (Richieste Per Minuto)
 rpm_limit = None             # Limite massimo RPM (Valorizzato solo nell'arg)
@@ -292,13 +293,19 @@ def handle_api_error(e, context_for_log, active_key_display, attempt_num):
 def get_translation_from_api(text_to_translate, context_for_log, args):
     """
     Funzione centralizzata per ottenere la traduzione. Gestisce i tentativi, la rotazione delle API,
-    i limiti RPM e la costruzione del prompt.
+    i limiti RPM, la costruzione del prompt e il caching.
     """
-    global major_failure_count, user_command_skip_api, model
+    global major_failure_count, user_command_skip_api, model, translation_cache
 
     if not determine_if_translatable(text_to_translate):
         return text_to_translate
 
+    cache_key = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
+    if cache_key in translation_cache:
+        print(f"    - ✅ CACHE HIT: Trovata traduzione in cache per '{text_to_translate[:50].strip()}...'.")
+        write_to_log(f"CACHE HIT: Usata traduzione in cache per il contesto: {context_for_log}")
+        return translation_cache[cache_key]
+    
     while True:
         if args.interactive: check_and_wait_if_paused(context_for_log)
         
@@ -319,7 +326,7 @@ def get_translation_from_api(text_to_translate, context_for_log, args):
                         return text_to_translate
                     prompt_text = args.custom_prompt.format(text_to_translate=text_to_translate)
                 else:
-                    prompt_base = f"""Traduci il seguente testo da {args.source_lang} a {args.target_lang}, mantenendo il contesto del gioco '{args.game_name}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
+                    prompt_base = f"""Traduci il seguente testo da {args.source_lang} a {args.target_lang}, mantenendo il contesto del gioco '{args.game_name}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player). In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
                     if args.prompt_context: prompt_base += f"\nIstruzione aggiuntiva: {args.prompt_context}."
                     prompt_base += "\nRispondi solo con la traduzione diretta."
                     prompt_text = f"{prompt_base}\nTesto originale:\n{text_to_translate}\n\nTraduzione in {args.target_lang}:"
@@ -332,6 +339,9 @@ def get_translation_from_api(text_to_translate, context_for_log, args):
                     translated_text = textwrap.fill(translated_text, width=args.wrap_at, newline=args.newline_char, replace_whitespace=False)
                 
                 major_failure_count = 0
+                translation_cache[cache_key] = translated_text
+                write_to_log(f"CACHE MISS: Nuova traduzione salvata in cache per il contesto: {context_for_log}")
+
                 return translated_text
 
             except Exception as api_exc:
