@@ -11,7 +11,8 @@ from threading import Thread, Event, Lock
 import textwrap
 from datetime import datetime
 from argparse_color_formatter import ColorHelpFormatter
-import json 
+import json
+import polib
 
 # ----- Costanti Globali -----
 MAX_RETRIES_PER_API_CALL = 3            # Tentativi per ogni richiesta con API
@@ -56,7 +57,7 @@ ALUMEN_ASCII_ART = """
 def get_script_args_updated():
     global script_args
     parser = argparse.ArgumentParser(
-        description="Alumen - Script per tradurre file CSV o JSON utilizzando Google Gemini.",
+        description="Alumen - Script per tradurre file CSV, JSON o PO utilizzando Google Gemini.",
         formatter_class=ColorHelpFormatter
     )
 
@@ -72,7 +73,7 @@ def get_script_args_updated():
     api_group.add_argument("--model-name", type=str, default=DEFAULT_MODEL_NAME, help=f"\033[97mNome del modello Gemini da utilizzare. Default: '{DEFAULT_MODEL_NAME}'\033[0m")
 
     file_format_group.add_argument("--input", type=str, default="input", help="\033[97mPercorso della cartella base contenente i file da tradurre. Default: 'input'\033[0m")
-    file_format_group.add_argument("--file-type", type=str, default="csv", choices=['csv', 'json'], help="\033[97mTipo di file da elaborare: 'csv' o 'json'. Default: 'csv'\033[0m")
+    file_format_group.add_argument("--file-type", type=str, default="csv", choices=['csv', 'json', 'po'], help="\033[97mTipo di file da elaborare: 'csv', 'json' o 'po'. Default: 'csv'\033[0m")
     file_format_group.add_argument("--encoding", type=str, default="utf-8", help="\033[97mCodifica caratteri dei file. Default: 'utf-8'\033[0m")
 
     csv_options_group.add_argument("--delimiter", type=str, default=",", help="\033[97m[Solo CSV] Carattere delimitatore. Default: ','\033[0m")
@@ -363,6 +364,57 @@ def get_translation_from_api(text_to_translate, context_for_log, args):
         else:
             time.sleep(15)
 
+def traduci_testo_po(input_file, output_file, args):
+    """Elabora un singolo file PO."""
+    file_basename = os.path.basename(input_file)
+    print(f"\n--- Elaborazione PO: {file_basename} ---")
+
+    try:
+        po_file = polib.pofile(input_file, encoding=args.encoding)
+    except Exception as e:
+        log_critical_error_and_exit(f"Impossibile leggere o parsare il file PO '{input_file}': {e}")
+
+    texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid))
+    print(f"Trovate {texts_to_translate_count} entry da tradurre nel file.")
+    processed_count = 0
+
+    try:
+        for entry in po_file:
+            with command_lock:
+                if user_command_skip_file:
+                    print(f"COMANDO 'skip file' ricevuto. Interruzione elaborazione di '{file_basename}'.")
+                    raise KeyboardInterrupt
+
+            if determine_if_translatable(entry.msgid):
+                processed_count += 1
+                original_text = entry.msgid
+                context_log = f"PO '{file_basename}', Contesto: '{entry.msgctxt}', Riga: {entry.linenum}"
+                
+                print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per riga {entry.linenum} (Contesto: {entry.msgctxt}):")
+                print(f"    Originale: '{original_text[:80].replace(chr(10), ' ')}...'")
+                
+                translated_text = get_translation_from_api(original_text, context_log, args)
+                entry.msgstr = translated_text
+                
+                print(f"    Tradotto:  '{translated_text[:80].replace(chr(10), ' ')}...'")
+            else:
+                if entry.msgstr == "":
+                    entry.msgstr = entry.msgid
+                    
+    except KeyboardInterrupt:
+        print(f"\n🛑 INTERRUZIONE UTENTE: Salvataggio dei progressi per il file '{file_basename}' in corso...")
+        write_to_log(f"INTERRUZIONE UTENTE: Salvataggio progressi parziali per PO '{file_basename}'")
+    
+    finally:
+        write_to_log(f"Salvataggio (completo o parziale) in corso per '{file_basename}' in '{output_file}'.")
+        try:
+            po_file.save(output_file)
+            print(f"✅ Salvataggio dati in '{output_file}' completato.")
+        except Exception as e:
+            log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
+            
+    print(f"--- Completato PO: {file_basename} ---")
+
 def traduci_testo_json(input_file, output_file, args):
     """Elabora un singolo file JSON."""
     file_basename = os.path.basename(input_file)
@@ -526,7 +578,7 @@ def traduci_testo_csv(input_file, output_file, args):
 
 def process_files_recursively(args):
     """Scansiona le cartelle, trova i file e avvia il processo di traduzione corretto."""
-    user_command_skip_file = False
+    global user_command_skip_file
     base_input_dir = args.input
     total_files_found = 0
 
@@ -546,21 +598,27 @@ def process_files_recursively(args):
         os.makedirs(output_subfolder, exist_ok=True)
 
         for filename in files_to_process:
-            if script_args.interactive and user_command_skip_file:
-                print(f"COMANDO 'skip file' ricevuto. Salto file '{filename}'.")
-                with command_lock: user_command_skip_file = False
-                continue
+            with command_lock:
+                if user_command_skip_file:
+                    print(f"COMANDO 'skip file' ricevuto. Salto file '{filename}'.")
+                    user_command_skip_file = False
+                    continue
 
             if script_args.interactive: check_and_wait_if_paused(f"Inizio file: {filename}")
             
             input_path = os.path.join(root_dir, filename)
-            output_filename = f"{os.path.splitext(filename)[0]}_trads.txt" if args.translation_only_output else filename
+            if args.translation_only_output:
+                 output_filename = f"{os.path.splitext(filename)[0]}_trads.txt"
+            else:
+                 output_filename = filename
             output_path = os.path.join(output_subfolder, output_filename)
             
             if args.file_type == 'csv':
                 traduci_testo_csv(input_path, output_path, args)
             elif args.file_type == 'json':
                 traduci_testo_json(input_path, output_path, args)
+            elif args.file_type == 'po':
+                traduci_testo_po(input_path, output_path, args)
 
 
 if __name__ == "__main__":

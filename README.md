@@ -39,6 +39,7 @@
 - Modalità Interattiva
 - Logging Dettagliato
 - Ripresa esecuzione da un lavoro interrotto
+- Funzione di caching
 - Alta configurazione prompt
 
 # Storia\Creazione Progetto
@@ -54,11 +55,11 @@ Tabella flag disponibili:
 |-----------------------------|------------------------------------------------------------|-----------------------------|-----------------------------------------------------------------|
 | `--api`                     | API key (una o più, separate da virgola)                   | Nessuno                     | `--api MIA_KEY1,MIA_KEY2`                                     |
 | `--model-name`              | Modello Gemini da usare                                   | `gemini-2.5-flash`          | `--model-name gemini-pro`                                     |
-| `--input`                   | Percorso cartella CSV                                      | `input`                     | `--input ./miei_csv`                                          |
+| `--input`                   | Percorso cartella file input                               | `input`                     | `--input ./miei_csv`                                          |
 | `--delimiter`               | Delimitatore CSV                                           | `,`                         | `--delimiter ;`                                               |
 | `--translate-col`           | Indice colonna da tradurre (parte da 0 o 1)                | `3`                         | `--translate-col 2`                                           |
 | `--output-col`              | Indice colonna output tradotto                             | `3`                         | `--output-col 4`                                              |
-| `--file-type`               | Tipo di file da elaborare: 'csv' o 'json'.                 | `csv`                       | `--file-type json`                                            |
+| `--file-type`               | Tipo di file da elaborare: 'csv', 'json', 'po'.            | `csv`                  | `--file-type json`                                            |
 | `--match-full-json-path`    | [Solo JSON] Per le chiavi JSON, richiede la corrispondenza del percorso completo della chiave (es. 'parent.child.key'), invece del solo nome della chiave.                             | Nessuno (opzionale)         | `--match-full-json-path`                                                |
 | `--json-keys`                | [Solo JSON, Obbligatorio] Elenco di chiavi (separate da virgola) da tradurre.                         | Nessuno                     | `--json-keys "name,description,item.lore"`                                       |
 | `--max-cols`                | Numero massimo colonne ammesse                             | Nessuno (opzionale)         | `--max-cols 5`                                                |
@@ -121,7 +122,7 @@ Download, installazione e configurazione:
 
 ### Configurazione File e Formato
 - `--input`: Percorso della cartella base contenente i file da tradurre. Default: input
-- `--file-type`: Tipo di file da elaborare: 'csv' o 'json'. Default: 'csv'
+- `--file-type`: Tipo di file da elaborare: 'csv', 'json' e 'po'. Default: 'csv'
 - `--encoding`: Codifica caratteri dei file. Default: 'utf-8'
 
 #### Input/Output e Formato CSV
