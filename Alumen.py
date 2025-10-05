@@ -33,6 +33,15 @@ script_args = None           # Oggetto per gli argomenti passati allo script
 log_file_path = None         # Path file log
 translation_cache = {}       # Dizionario per la cache delle traduzioni
 
+# Nuovi contatori per le statistiche
+api_call_counts = {}         # Dizionario per contare l'uso di ogni API key (indice: conteggio)
+cache_hit_count = 0          # Contatore per le traduzioni trovate nella cache
+# Nuovi contatori per le statistiche richieste
+start_time = 0.0             # Tempo di inizio esecuzione
+total_files_translated = 0   # Contatore per i file tradotti
+total_entries_translated = 0 # Contatore per le frasi/entry tradotte
+
+
 # Gestione RPM (Richieste Per Minuto)
 rpm_limit = None             # Limite massimo RPM (Valorizzato solo nell'arg)
 rpm_request_timestamps = []  # Richieste effettuate
@@ -94,9 +103,7 @@ def get_script_args_updated():
     translation_group.add_argument("--translation-only-output", action="store_true", help="\033[97mL'output conterrà solo i testi tradotti, uno per riga.\033[0m")
     translation_group.add_argument("--rpm", type=int, default=None, help="\033[97mNumero massimo di richieste API a Gemini per minuto.\033[0m")
     translation_group.add_argument("--enable-file-context", action="store_true", help="\033[97mAbilita l'analisi di un campione del file per generare un contesto generale da usare in tutte le traduzioni del file.\033[0m")
-    # NUOVO FLAG AGGIUNTO
     translation_group.add_argument("--full-context-sample", action="store_true", help="\033[97m[Necessita --enable-file-context] Utilizza TUTTE le frasi valide nel file (anziché solo le prime 15) per generare il contesto generale. Attenzione: può risultare in richieste API molto grandi.\033[0m")
-    # FINE NUOVO FLAG
 
     wrapping_group.add_argument("--wrap-at", type=int, default=None, help="\033[97mLunghezza massima della riga per a capo automatico.\033[0m")
     wrapping_group.add_argument("--newline-char", type=str, default='\\n', help="\033[97mCarattere da usare per l'a capo automatico.\033[0m")
@@ -166,7 +173,7 @@ def log_critical_error_and_exit(message):
     sys.exit(1)
 
 def initialize_api_keys_and_model():
-    global available_api_keys, current_api_key_index, model, rpm_limit
+    global available_api_keys, current_api_key_index, model, rpm_limit, api_call_counts
     print("\n--- Inizializzazione API e Modello ---")
     if script_args.api:
         keys_from_arg = [key.strip() for key in script_args.api.split(',') if key.strip()]
@@ -184,6 +191,9 @@ def initialize_api_keys_and_model():
     available_api_keys = [x for x in available_api_keys if not (x in seen or seen.add(x))]
     if not available_api_keys:
         log_critical_error_and_exit("Nessuna API key trovata. Specificare tramite --api o nel file 'api_key.txt'.")
+    
+    # Inizializza il contatore delle chiamate API per ogni chiave
+    api_call_counts = {i: 0 for i in range(len(available_api_keys))}
     
     print(f"ℹ️  Totale API keys uniche disponibili: {len(available_api_keys)}.")
     current_api_key_index = 0
@@ -330,7 +340,7 @@ def save_persistent_cache():
 # --- FUNZIONE PER LA GENERAZIONE DEL CONTESTO DEL FILE ---
 def generate_file_context(sample_text, file_name, args):
     """Genera il contesto generale del file basandosi su un campione di testo."""
-    global major_failure_count, model, translation_cache
+    global major_failure_count, model, translation_cache, cache_hit_count, api_call_counts
     
     context_cache_key = f"CONTEXT_FILE::{file_name}::{args.game_name}::{args.prompt_context}"
     if args.full_context_sample:
@@ -338,6 +348,7 @@ def generate_file_context(sample_text, file_name, args):
         
     if context_cache_key in translation_cache:
         print(f"  - ✅ CACHE HIT: Trovato contesto in cache per il file '{file_name}'.")
+        cache_hit_count += 1
         return translation_cache[context_cache_key]
 
     print(f"  - Richiesta API per la determinazione del contesto per il file '{file_name}'...")
@@ -368,6 +379,8 @@ def generate_file_context(sample_text, file_name, args):
                 
                 response_obj = model.generate_content(prompt)
                 file_context = response_obj.text.strip()
+                
+                api_call_counts[current_api_key_index] += 1 # Aggiorna contatore API
                 
                 if args.wrap_at and args.wrap_at > 0:
                     file_context = textwrap.fill(file_context, width=args.wrap_at, newline=args.newline_char, replace_whitespace=False)
@@ -407,7 +420,7 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
     Funzione centralizzata per ottenere la traduzione. Gestisce i tentativi, la rotazione delle API,
     i limiti RPM, la costruzione del prompt e il caching.
     """
-    global major_failure_count, user_command_skip_api, model, translation_cache
+    global major_failure_count, user_command_skip_api, model, translation_cache, cache_hit_count, api_call_counts
 
     if not determine_if_translatable(text_to_translate):
         return text_to_translate
@@ -419,6 +432,7 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
     if cache_key in translation_cache:
         print(f"    - ✅ CACHE HIT: Trovata traduzione in cache per '{text_to_translate[:50].strip()}...'.")
         write_to_log(f"CACHE HIT: Usata traduzione in cache per il contesto: {context_for_log}")
+        cache_hit_count += 1 # Aggiorna contatore cache hit
         return translation_cache[cache_key]
     
     while True:
@@ -454,6 +468,8 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
                 time.sleep(BASE_API_CALL_INTERVAL_SECONDS)
                 response_obj = model.generate_content(prompt_text)
                 translated_text = response_obj.text.strip()
+                
+                api_call_counts[current_api_key_index] += 1 # Aggiorna contatore API
 
                 if args.wrap_at and args.wrap_at > 0:
                     translated_text = textwrap.fill(translated_text, width=args.wrap_at, newline=args.newline_char, replace_whitespace=False)
@@ -536,6 +552,7 @@ def traduci_testo_po(input_file, output_file, args):
     texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid) and '_' not in entry.msgid)
     print(f"Trovate {texts_to_translate_count} entry da tradurre nel file (escluse chiavi con '_').")
     processed_count = 0
+    global total_entries_translated # <--- Dichiarazione variabile globale
 
     try:
         for entry in po_file:
@@ -563,6 +580,7 @@ def traduci_testo_po(input_file, output_file, args):
                 
                 entry.msgctxt = translated_context
                 context_for_prompt = translated_context
+                total_entries_translated += 1 # <--- INCREMENTO PER CONTESTO
                 print(f"    Tradotto:  '{entry.msgctxt}'")
 
             is_msgid_translatable = (entry.msgid and 
@@ -571,6 +589,7 @@ def traduci_testo_po(input_file, output_file, args):
             
             if is_msgid_translatable:
                 processed_count += 1
+                total_entries_translated += 1 # <--- INCREMENTO PER MSGID
                 print(f"  - Traduzione Testo ({processed_count}/{texts_to_translate_count})...")
 
                 # NUOVA LOGICA: UNISCE CONTESTO FILE + CONTESTO ENTRY (MSGCTXT)
@@ -646,6 +665,7 @@ def traduci_testo_json(input_file, output_file, args):
     try:
         texts_to_translate_count = 0
         processed_count = 0
+        global total_entries_translated # <--- Dichiarazione variabile globale
 
         if args.match_full_json_path:
             print("ℹ️  Modalità traduzione JSON con corrispondenza percorso completo abilitata.")
@@ -663,11 +683,13 @@ def traduci_testo_json(input_file, output_file, args):
 
             def _traverse_and_translate_legacy(obj, path=""):
                 nonlocal processed_count
+                global total_entries_translated # Importo qui per le funzioni annidate
                 if isinstance(obj, dict):
                     for key, value in list(obj.items()):
                         current_path = f"{path}.{key}" if path else key
                         if current_path in keys_to_translate and determine_if_translatable(value):
                             processed_count += 1
+                            total_entries_translated += 1 # <--- INCREMENTO GLOBALE
                             context_log = f"JSON '{file_basename}', Chiave: '{current_path}'"
                             print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path}':")
                             print(f"    Originale: '{str(value)[:80]}...'")
@@ -697,10 +719,12 @@ def traduci_testo_json(input_file, output_file, args):
 
             def _traverse_and_translate_new(obj, path=""):
                 nonlocal processed_count
+                global total_entries_translated # Importo qui per le funzioni annidate
                 if isinstance(obj, dict):
                     for key, value in list(obj.items()):
                         if key in keys_to_translate and determine_if_translatable(value):
                             processed_count += 1
+                            total_entries_translated += 1 # <--- INCREMENTO GLOBALE
                             current_path_for_log = f"{path}.{key}" if path else key
                             context_log = f"JSON '{file_basename}', Chiave: '{current_path_for_log}'"
                             print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path_for_log}':")
@@ -782,11 +806,13 @@ def traduci_testo_csv(input_file, output_file, args):
     print(f"Trovate {texts_to_translate_count} righe da tradurre nella colonna {args.translate_col}.")
     processed_count = 0
     translated_texts_for_only_output = []
+    global total_entries_translated # <--- Dichiarazione variabile globale
 
     for i, row in enumerate(data_rows):
         display_row_num = i + (2 if header else 1)
         if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col]):
             processed_count += 1
+            total_entries_translated += 1 # <--- INCREMENTO GLOBALE
             original_text = row[args.translate_col]
             context_log = f"CSV '{file_basename}', Riga: {display_row_num}"
             print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per riga {display_row_num}:")
@@ -816,7 +842,7 @@ def traduci_testo_csv(input_file, output_file, args):
 
 def process_files_recursively(args):
     """Scansiona le cartelle, trova i file e avvia il processo di traduzione corretto."""
-    global user_command_skip_file
+    global user_command_skip_file, total_files_translated
     base_input_dir = args.input
     total_files_found = 0
 
@@ -857,6 +883,8 @@ def process_files_recursively(args):
                 traduci_testo_json(input_path, output_path, args)
             elif args.file_type == 'po':
                 traduci_testo_po(input_path, output_path, args)
+                
+            total_files_translated += 1 # <--- INCREMENTO FILE CONTATORE
 
 
 if __name__ == "__main__":
@@ -869,6 +897,8 @@ if __name__ == "__main__":
         log_critical_error_and_exit("Per --file-type 'json', è obbligatorio specificare le chiavi con --json-keys.")
 
     script_is_paused.set()
+
+    start_time = time.time()
 
     if args_parsed_main.enable_file_log: setup_log_file()
     initialize_api_keys_and_model()
@@ -887,6 +917,39 @@ if __name__ == "__main__":
     finally:
         if cmd_thread and cmd_thread.is_alive():
             print("INFO: Thread input comandi attivo (terminerà con lo script).")
+            
         save_persistent_cache()  # Salva la cache prima di terminare
+        
+        # --- STATISTICHE FINALI ---
+        end_time = time.time()
+        total_time = end_time - start_time
+        
+        total_api_calls = sum(api_call_counts.values())
+        
+        avg_time_per_file = 0.0
+        if total_files_translated > 0:
+            avg_time_per_file = total_time / total_files_translated
+
+        print("\n\n" + "=" * 50)
+        print("         RIEPILOGO STATISTICHE FINALI")
+        print("=" * 50)
+        
+        print(f"📊 Tempo Totale di Esecuzione: {format_time_delta(total_time)}")
+        if total_files_translated > 0:
+            print(f"📊 Tempo Medio per File:       {format_time_delta(avg_time_per_file)}")
+        print(f"📊 File Tradotti:              {total_files_translated}")
+        print(f"📊 Frasi/Entry Tradotte:       {total_entries_translated}")
+        
+        print(f"\n➡️  Cache Hit Totali: {cache_hit_count}")
+        print(f"➡️  API Call Totali:  {total_api_calls}")
+        
+        print("\n--- Dettaglio Utilizzo API Key ---")
+        for i, count in api_call_counts.items():
+            key_suffix = available_api_keys[i][-4:]
+            print(f"    - API Key ...{key_suffix}: {count} chiamate")
+            
+        print("-" * 50)
+        # --- FINE STATISTICHE FINALI ---
+
         write_to_log(f"--- FINE Sessione Log: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
         print("\nScript Alumen terminato.")
