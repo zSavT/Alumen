@@ -19,6 +19,7 @@ MAX_RETRIES_PER_API_CALL = 3            # Tentativi per ogni richiesta con API
 MAX_MAJOR_FAILURES_THRESHOLD = 6        # Numero massimo di fallimenti prima del passaggio ad nuova API
 DEFAULT_MODEL_NAME = "gemini-2.5-flash" # Modello Gemini predefinito
 LOG_FILE_NAME = "log.txt"               # Nome file log
+CACHE_FILE_NAME = "alumen_cache.json"   # Nome file per la cache persistente
 DEFAULT_API_ERROR_RETRY_SECONDS = 10    # Numero di secondi di attesa tra una chiamata all'API se non impostato RPM o l'errore dell'api non suggerisce un delay
 BASE_API_CALL_INTERVAL_SECONDS = 0.2    # Pausa minima tra chiamate API, l'RPM gestisce il resto
 
@@ -100,6 +101,7 @@ def get_script_args_updated():
     utility_group.add_argument("--interactive", action="store_true", help="\033[97mAbilita comandi interattivi.\033[0m")
     utility_group.add_argument("--resume", action="store_true", help="\033[97mTenta di riprendere la traduzione da file parziali.\033[0m")
     utility_group.add_argument("--rotate-on-limit-or-error", action="store_true", help="\033[97mPassa alla API key successiva in caso di errore o limite RPM.\033[0m")
+    utility_group.add_argument("--persistent-cache", action="store_true", help=f"\033[97mAttiva la cache persistente su file ('{CACHE_FILE_NAME}').\033[0m")
 
     parsed_args = parser.parse_args()
     if parsed_args.delimiter == '\\t':
@@ -291,7 +293,35 @@ def handle_api_error(e, context_for_log, active_key_display, attempt_num):
     if match: retry_delay_seconds = int(match.group(1)) + 1
     return retry_delay_seconds
 
-def get_translation_from_api(text_to_translate, context_for_log, args):
+def load_persistent_cache():
+    """Carica la cache delle traduzioni da file se l'opzione è attiva."""
+    global translation_cache, script_args
+    if not script_args.persistent_cache:
+        return
+    try:
+        if os.path.exists(CACHE_FILE_NAME):
+            with open(CACHE_FILE_NAME, 'r', encoding='utf-8') as f:
+                translation_cache = json.load(f)
+            print(f"✅ Cache persistente caricata da '{CACHE_FILE_NAME}' con {len(translation_cache)} voci.")
+        else:
+            print(f"ℹ️  File cache '{CACHE_FILE_NAME}' non trovato. Verrà creato a fine esecuzione.")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️  Attenzione: Impossibile caricare la cache da '{CACHE_FILE_NAME}': {e}. La cache verrà ricreata.")
+        translation_cache = {}
+
+def save_persistent_cache():
+    """Salva la cache delle traduzioni su file se l'opzione è attiva."""
+    global translation_cache, script_args
+    if not script_args.persistent_cache or not translation_cache:
+        return
+    try:
+        with open(CACHE_FILE_NAME, 'w', encoding='utf-8') as f:
+            json.dump(translation_cache, f, ensure_ascii=False, indent=4)
+        print(f"\n✅ Cache di traduzione ({len(translation_cache)} voci) salvata in '{CACHE_FILE_NAME}'.")
+    except IOError as e:
+        print(f"\n❌ ERRORE: Impossibile salvare la cache in '{CACHE_FILE_NAME}': {e}")
+
+def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_context=None):
     """
     Funzione centralizzata per ottenere la traduzione. Gestisce i tentativi, la rotazione delle API,
     i limiti RPM, la costruzione del prompt e il caching.
@@ -301,7 +331,10 @@ def get_translation_from_api(text_to_translate, context_for_log, args):
     if not determine_if_translatable(text_to_translate):
         return text_to_translate
 
-    cache_key = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
+    # La chiave della cache (un tuple) viene convertita in una stringa JSON per essere serializzabile.
+    cache_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context, dynamic_context)
+    cache_key = json.dumps(cache_key_tuple, ensure_ascii=False)
+
     if cache_key in translation_cache:
         print(f"    - ✅ CACHE HIT: Trovata traduzione in cache per '{text_to_translate[:50].strip()}...'.")
         write_to_log(f"CACHE HIT: Usata traduzione in cache per il contesto: {context_for_log}")
@@ -329,6 +362,7 @@ def get_translation_from_api(text_to_translate, context_for_log, args):
                 else:
                     prompt_base = f"""Traduci il seguente testo da {args.source_lang} a {args.target_lang}, mantenendo il contesto del gioco '{args.game_name}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player). In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
                     if args.prompt_context: prompt_base += f"\nIstruzione aggiuntiva: {args.prompt_context}."
+                    if dynamic_context: prompt_base += f"\nContesto specifico per questo testo: '{dynamic_context}'."
                     prompt_base += "\nRispondi solo con la traduzione diretta."
                     prompt_text = f"{prompt_base}\nTesto originale:\n{text_to_translate}\n\nTraduzione in {args.target_lang}:"
                 
@@ -374,8 +408,9 @@ def traduci_testo_po(input_file, output_file, args):
     except Exception as e:
         log_critical_error_and_exit(f"Impossibile leggere o parsare il file PO '{input_file}': {e}")
 
-    texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid))
-    print(f"Trovate {texts_to_translate_count} entry da tradurre nel file.")
+    # Conteggio corretto delle entry da tradurre (solo quelle con msgid traducibile)
+    texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid) and '_' not in entry.msgid)
+    print(f"Trovate {texts_to_translate_count} entry da tradurre nel file (escluse chiavi con '_').")
     processed_count = 0
 
     try:
@@ -385,19 +420,57 @@ def traduci_testo_po(input_file, output_file, args):
                     print(f"COMANDO 'skip file' ricevuto. Interruzione elaborazione di '{file_basename}'.")
                     raise KeyboardInterrupt
 
-            if determine_if_translatable(entry.msgid):
-                processed_count += 1
-                original_text = entry.msgid
-                context_log = f"PO '{file_basename}', Contesto: '{entry.msgctxt}', Riga: {entry.linenum}"
+            # Separatore visuale per ogni entry nel log
+            print(f"\n--- Riga {entry.linenum} ---")
+
+            # --- 1. GESTIONE E TRADUZIONE CONTESTO (MSGCTXT) ---
+            original_context = entry.msgctxt
+            context_for_prompt = None
+            
+            # Controlli per la traducibilità del contesto
+            is_context_translatable = (original_context and 
+                                       determine_if_translatable(original_context) and
+                                       '_' not in original_context) # Aggiunto: esclude chiavi con '_'
+
+            if is_context_translatable:
+                print(f"  - Traduzione Contesto...")
+                print(f"    Originale: '{original_context}'")
                 
-                print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per riga {entry.linenum} (Contesto: {entry.msgctxt}):")
+                context_log_for_ctxt = f"PO '{file_basename}', Traduzione Contesto, Riga: {entry.linenum}"
+                # Chiamata API per tradurre il contesto stesso
+                translated_context = get_translation_from_api(original_context, context_log_for_ctxt, args)
+                
+                entry.msgctxt = translated_context  # Aggiorna il contesto con la sua traduzione
+                context_for_prompt = translated_context  # Usa il nuovo contesto per la traduzione di msgid
+                print(f"    Tradotto:  '{entry.msgctxt}'")
+
+            # --- 2. GESTIONE E TRADUZIONE TESTO (MSGID) ---
+            
+            # Controllo combinato per msgid (come richiesto)
+            is_msgid_translatable = (entry.msgid and 
+                                     determine_if_translatable(entry.msgid) and
+                                     '_' not in entry.msgid) # Aggiunto: esclude chiavi con '_'
+            
+            if is_msgid_translatable:
+                processed_count += 1
+                print(f"  - Traduzione Testo ({processed_count}/{texts_to_translate_count})...")
+
+                # Log sull'uso del contesto per la traduzione di msgid
+                if context_for_prompt:
+                    print(f"    (Usando contesto tradotto: '{context_for_prompt}')")
+                elif original_context:
+                    print(f"    (Contesto ID ignorato per traduzione: '{original_context}')")
+
+                original_text = entry.msgid
                 print(f"    Originale: '{original_text[:80].replace(chr(10), ' ')}...'")
                 
-                translated_text = get_translation_from_api(original_text, context_log, args)
+                context_log = f"PO '{file_basename}', Traduzione msgid, Riga: {entry.linenum}"
+                translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=context_for_prompt)
                 entry.msgstr = translated_text
                 
                 print(f"    Tradotto:  '{translated_text[:80].replace(chr(10), ' ')}...'")
             else:
+                # Se msgstr è vuoto, copia msgid, anche per testo non traducibile (es. placeholder o chiavi)
                 if entry.msgstr == "":
                     entry.msgstr = entry.msgid
                     
@@ -634,9 +707,7 @@ if __name__ == "__main__":
 
     if args_parsed_main.enable_file_log: setup_log_file()
     initialize_api_keys_and_model()
-
-    if not os.path.isdir(args_parsed_main.input):
-        log_critical_error_and_exit(f"Il percorso di input '{args_parsed_main.input}' non è una cartella valida.")
+    load_persistent_cache()  # Carica la cache prima di iniziare l'elaborazione
 
     cmd_thread = None
     if args_parsed_main.interactive:
@@ -651,5 +722,6 @@ if __name__ == "__main__":
     finally:
         if cmd_thread and cmd_thread.is_alive():
             print("INFO: Thread input comandi attivo (terminerà con lo script).")
+        save_persistent_cache()  # Salva la cache prima di terminare
         write_to_log(f"--- FINE Sessione Log: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
         print("\nScript Alumen terminato.")
