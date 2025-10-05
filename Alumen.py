@@ -22,6 +22,7 @@ LOG_FILE_NAME = "log.txt"               # Nome file log
 CACHE_FILE_NAME = "alumen_cache.json"   # Nome file per la cache persistente
 DEFAULT_API_ERROR_RETRY_SECONDS = 10    # Numero di secondi di attesa tra una chiamata all'API se non impostato RPM o l'errore dell'api non suggerisce un delay
 BASE_API_CALL_INTERVAL_SECONDS = 0.2    # Pausa minima tra chiamate API, l'RPM gestisce il resto
+FILE_CONTEXT_SAMPLE_SIZE = 15           # Numero di righe/entry da usare per determinare il contesto del file
 
 # ----- Variabili Globali -----
 available_api_keys = []      # Lista API CaricateI
@@ -92,6 +93,10 @@ def get_script_args_updated():
     translation_group.add_argument("--custom-prompt", type=str, default=None, help="\033[97mUsa un prompt personalizzato. OBBLIGATORIO: includere '{text_to_translate}'.\033[0m")
     translation_group.add_argument("--translation-only-output", action="store_true", help="\033[97mL'output conterrà solo i testi tradotti, uno per riga.\033[0m")
     translation_group.add_argument("--rpm", type=int, default=None, help="\033[97mNumero massimo di richieste API a Gemini per minuto.\033[0m")
+    translation_group.add_argument("--enable-file-context", action="store_true", help="\033[97mAbilita l'analisi di un campione del file per generare un contesto generale da usare in tutte le traduzioni del file.\033[0m")
+    # NUOVO FLAG AGGIUNTO
+    translation_group.add_argument("--full-context-sample", action="store_true", help="\033[97m[Necessita --enable-file-context] Utilizza TUTTE le frasi valide nel file (anziché solo le prime 15) per generare il contesto generale. Attenzione: può risultare in richieste API molto grandi.\033[0m")
+    # FINE NUOVO FLAG
 
     wrapping_group.add_argument("--wrap-at", type=int, default=None, help="\033[97mLunghezza massima della riga per a capo automatico.\033[0m")
     wrapping_group.add_argument("--newline-char", type=str, default='\\n', help="\033[97mCarattere da usare per l'a capo automatico.\033[0m")
@@ -280,6 +285,7 @@ def wait_for_rpm_limit():
 def determine_if_translatable(text_value):
     if not isinstance(text_value, str): return False
     text_value_stripped = text_value.strip()
+    # Modifica per non tradurre se contiene solo numeri o '_' come richiesto precedentemente.
     if not text_value_stripped or text_value_stripped.isdigit() or re.match(r'^[\W_]+$', text_value_stripped) or "\\u" in text_value_stripped:
         return False
     return True
@@ -321,6 +327,81 @@ def save_persistent_cache():
     except IOError as e:
         print(f"\n❌ ERRORE: Impossibile salvare la cache in '{CACHE_FILE_NAME}': {e}")
 
+# --- FUNZIONE PER LA GENERAZIONE DEL CONTESTO DEL FILE ---
+def generate_file_context(sample_text, file_name, args):
+    """Genera il contesto generale del file basandosi su un campione di testo."""
+    global major_failure_count, model, translation_cache
+    
+    context_cache_key = f"CONTEXT_FILE::{file_name}::{args.game_name}::{args.prompt_context}"
+    if args.full_context_sample:
+        context_cache_key += "::FULL_SAMPLE"
+        
+    if context_cache_key in translation_cache:
+        print(f"  - ✅ CACHE HIT: Trovato contesto in cache per il file '{file_name}'.")
+        return translation_cache[context_cache_key]
+
+    print(f"  - Richiesta API per la determinazione del contesto per il file '{file_name}'...")
+    
+    context_for_log = f"Generazione Contesto per File: {file_name}"
+
+    prompt = f"""
+    Analizza il seguente campione di testo, che proviene da un file di traduzione per il gioco '{args.game_name}'.
+    Il tuo compito è determinare, in non più di due frasi concise, l'argomento principale, il contesto generale o l'ambientazione più probabile di questo file.
+    Questo contesto verrà utilizzato per migliorare la qualità delle traduzioni successive.
+    Rispondi solo con il contesto generato.
+
+    Campione di testo:\n---
+    {sample_text}
+    ---
+    Contesto generato:
+    """
+    
+    while True:
+        if args.interactive: check_and_wait_if_paused(context_for_log)
+        
+        active_key_short = available_api_keys[current_api_key_index][-4:]
+        
+        for attempt_idx in range(MAX_RETRIES_PER_API_CALL):
+            try:
+                wait_for_rpm_limit()
+                time.sleep(BASE_API_CALL_INTERVAL_SECONDS)
+                
+                response_obj = model.generate_content(prompt)
+                file_context = response_obj.text.strip()
+                
+                if args.wrap_at and args.wrap_at > 0:
+                    file_context = textwrap.fill(file_context, width=args.wrap_at, newline=args.newline_char, replace_whitespace=False)
+                
+                translation_cache[context_cache_key] = file_context
+                print(f"  - ✅ Contesto file generato: '{file_context}'")
+                write_to_log(f"Contesto generato per {file_name}: {file_context}")
+                major_failure_count = 0
+                return file_context
+
+            except Exception as api_exc:
+                if args.rotate_on_limit_or_error:
+                    if rotate_api_key(reason_override=f"Errore API durante generazione contesto"):
+                        break
+                
+                retry_delay = handle_api_error(api_exc, context_for_log, active_key_short, attempt_idx)
+                if attempt_idx < MAX_RETRIES_PER_API_CALL - 1:
+                    time.sleep(retry_delay)
+        
+        # Gestione fallimenti API per la generazione del contesto
+        major_failure_count += 1
+        print(f"    - Fallimento definitivo generazione contesto con Key ...{active_key_short}. Conteggio fallimenti: {major_failure_count}/{MAX_MAJOR_FAILURES_THRESHOLD}")
+        
+        if major_failure_count >= MAX_MAJOR_FAILURES_THRESHOLD:
+            if not rotate_api_key():
+                print("    ⚠️  ATTENZIONE: Rotazione API fallita. Contesto file non generabile. Proseguo senza contesto specifico.")
+                write_to_log(f"ERRORE CRITICO: Contesto file non generabile per {file_name}. Proseguo senza contesto specifico.")
+                return None
+        else:
+            time.sleep(15)
+            
+    return None # Fallback in caso di errore non gestito
+
+# --- FUNZIONE GET_TRANSLATION_FROM_API ---
 def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_context=None):
     """
     Funzione centralizzata per ottenere la traduzione. Gestisce i tentativi, la rotazione delle API,
@@ -361,8 +442,12 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
                     prompt_text = args.custom_prompt.format(text_to_translate=text_to_translate)
                 else:
                     prompt_base = f"""Traduci il seguente testo da {args.source_lang} a {args.target_lang}, mantenendo il contesto del gioco '{args.game_name}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player). In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
+                    
                     if args.prompt_context: prompt_base += f"\nIstruzione aggiuntiva: {args.prompt_context}."
-                    if dynamic_context: prompt_base += f"\nContesto specifico per questo testo: '{dynamic_context}'."
+                    
+                    # Usa dynamic_context per il contesto specifico del file o dell'entry (o entrambi)
+                    if dynamic_context: prompt_base += f"\nContesto aggiuntivo per questa traduzione: '{dynamic_context}'."
+                    
                     prompt_base += "\nRispondi solo con la traduzione diretta."
                     prompt_text = f"{prompt_base}\nTesto originale:\n{text_to_translate}\n\nTraduzione in {args.target_lang}:"
                 
@@ -397,7 +482,27 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
                 time.sleep(60)
         else:
             time.sleep(15)
+# --- NUOVA FUNZIONE HELPER PER ESTRARRE IL CAMPIONE JSON ---
+# La funzione è stata aggiornata per accettare l'argomento 'limit'.
+def _extract_json_sample_texts(obj, keys_to_translate, sample_list, path="", match_full=False, limit=FILE_CONTEXT_SAMPLE_SIZE):
+    """Estrae i primi N testi traducibili per la determinazione del contesto JSON. Se 'limit' è None, estrae tutti."""
+    if limit is not None and len(sample_list) >= limit: return
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            current_path = f"{path}.{key}" if path else key
+            is_match = (current_path in keys_to_translate) if match_full else (key in keys_to_translate)
+            
+            if is_match and determine_if_translatable(value):
+                sample_list.append(str(value))
+                if limit is not None and len(sample_list) >= limit: return
 
+            _extract_json_sample_texts(value, keys_to_translate, sample_list, current_path, match_full, limit)
+    elif isinstance(obj, list):
+        for item in obj:
+            _extract_json_sample_texts(item, keys_to_translate, sample_list, path, match_full, limit)
+
+
+# --- FUNZIONE TRADUCI_TESTO_PO AGGIORNATA ---
 def traduci_testo_po(input_file, output_file, args):
     """Elabora un singolo file PO."""
     file_basename = os.path.basename(input_file)
@@ -408,7 +513,26 @@ def traduci_testo_po(input_file, output_file, args):
     except Exception as e:
         log_critical_error_and_exit(f"Impossibile leggere o parsare il file PO '{input_file}': {e}")
 
-    # Conteggio corretto delle entry da tradurre (solo quelle con msgid traducibile)
+    # --- Generazione Contesto File (PO) ---
+    file_context = None
+    if args.enable_file_context: # <-- CHECK FLAG
+        
+        # NUOVA LOGICA: DETERMINAZIONE DEL LIMITE
+        sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
+        
+        sample_texts = []
+        for entry in po_file:
+            if determine_if_translatable(entry.msgid) and '_' not in entry.msgid:
+                sample_texts.append(entry.msgid)
+                if sample_limit is not None and len(sample_texts) >= sample_limit:
+                    break
+        
+        if sample_texts:
+            print(f"  - Generazione contesto con {'TUTTE' if sample_limit is None else f'le prime {sample_limit}'} frasi ({len(sample_texts)} totali)...")
+            sample_text_for_api = "\n".join(sample_texts)
+            file_context = generate_file_context(sample_text_for_api, file_basename, args)
+    # ----------------------------------------
+
     texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid) and '_' not in entry.msgid)
     print(f"Trovate {texts_to_translate_count} entry da tradurre nel file (escluse chiavi con '_').")
     processed_count = 0
@@ -420,44 +544,46 @@ def traduci_testo_po(input_file, output_file, args):
                     print(f"COMANDO 'skip file' ricevuto. Interruzione elaborazione di '{file_basename}'.")
                     raise KeyboardInterrupt
 
-            # Separatore visuale per ogni entry nel log
             print(f"\n--- Riga {entry.linenum} ---")
 
-            # --- 1. GESTIONE E TRADUZIONE CONTESTO (MSGCTXT) ---
             original_context = entry.msgctxt
             context_for_prompt = None
             
-            # Controlli per la traducibilità del contesto
             is_context_translatable = (original_context and 
                                        determine_if_translatable(original_context) and
-                                       '_' not in original_context) # Aggiunto: esclude chiavi con '_'
+                                       '_' not in original_context)
 
             if is_context_translatable:
                 print(f"  - Traduzione Contesto...")
                 print(f"    Originale: '{original_context}'")
                 
                 context_log_for_ctxt = f"PO '{file_basename}', Traduzione Contesto, Riga: {entry.linenum}"
-                # Chiamata API per tradurre il contesto stesso
-                translated_context = get_translation_from_api(original_context, context_log_for_ctxt, args)
+                # Passa file_context per la traduzione di msgctxt (se generato)
+                translated_context = get_translation_from_api(original_context, context_log_for_ctxt, args, dynamic_context=file_context)
                 
-                entry.msgctxt = translated_context  # Aggiorna il contesto con la sua traduzione
-                context_for_prompt = translated_context  # Usa il nuovo contesto per la traduzione di msgid
+                entry.msgctxt = translated_context
+                context_for_prompt = translated_context
                 print(f"    Tradotto:  '{entry.msgctxt}'")
 
-            # --- 2. GESTIONE E TRADUZIONE TESTO (MSGID) ---
-            
-            # Controllo combinato per msgid (come richiesto)
             is_msgid_translatable = (entry.msgid and 
                                      determine_if_translatable(entry.msgid) and
-                                     '_' not in entry.msgid) # Aggiunto: esclude chiavi con '_'
+                                     '_' not in entry.msgid)
             
             if is_msgid_translatable:
                 processed_count += 1
                 print(f"  - Traduzione Testo ({processed_count}/{texts_to_translate_count})...")
 
-                # Log sull'uso del contesto per la traduzione di msgid
+                # NUOVA LOGICA: UNISCE CONTESTO FILE + CONTESTO ENTRY (MSGCTXT)
+                combined_context = []
+                if file_context:
+                    combined_context.append(f"Contesto Generale File: {file_context}")
                 if context_for_prompt:
-                    print(f"    (Usando contesto tradotto: '{context_for_prompt}')")
+                    combined_context.append(f"Contesto Specifico Entry (msgctxt tradotto): {context_for_prompt}")
+                
+                final_dynamic_context = " - ".join(combined_context) if combined_context else None
+                
+                if final_dynamic_context:
+                    print(f"    (Usando contesto combinato: '{final_dynamic_context}')")
                 elif original_context:
                     print(f"    (Contesto ID ignorato per traduzione: '{original_context}')")
 
@@ -465,7 +591,8 @@ def traduci_testo_po(input_file, output_file, args):
                 print(f"    Originale: '{original_text[:80].replace(chr(10), ' ')}...'")
                 
                 context_log = f"PO '{file_basename}', Traduzione msgid, Riga: {entry.linenum}"
-                translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=context_for_prompt)
+                # Passa il contesto combinato
+                translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=final_dynamic_context)
                 entry.msgstr = translated_text
                 
                 print(f"    Tradotto:  '{translated_text[:80].replace(chr(10), ' ')}...'")
@@ -487,6 +614,7 @@ def traduci_testo_po(input_file, output_file, args):
             
     print(f"--- Completato PO: {file_basename} ---")
 
+# --- FUNZIONE TRADUCI_TESTO_JSON AGGIORNATA ---
 def traduci_testo_json(input_file, output_file, args):
     """Elabora un singolo file JSON."""
     file_basename = os.path.basename(input_file)
@@ -499,6 +627,21 @@ def traduci_testo_json(input_file, output_file, args):
 
     keys_to_translate = {k.strip() for k in args.json_keys.split(',')}
     translated_texts_for_only_output = []
+    
+    # --- Generazione Contesto File (JSON) ---
+    file_context = None
+    if args.enable_file_context: # <-- CHECK FLAG
+        sample_texts = []
+        # NUOVA LOGICA: DETERMINAZIONE DEL LIMITE
+        sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
+        
+        _extract_json_sample_texts(data, keys_to_translate, sample_texts, match_full=args.match_full_json_path, limit=sample_limit)
+
+        if sample_texts:
+            print(f"  - Generazione contesto con {'TUTTE' if sample_limit is None else f'le prime {sample_limit}'} frasi ({len(sample_texts)} totali)...")
+            sample_text_for_api = "\n".join(sample_texts)
+            file_context = generate_file_context(sample_text_for_api, file_basename, args)
+    # ----------------------------------------
     
     try:
         texts_to_translate_count = 0
@@ -528,7 +671,8 @@ def traduci_testo_json(input_file, output_file, args):
                             context_log = f"JSON '{file_basename}', Chiave: '{current_path}'"
                             print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path}':")
                             print(f"    Originale: '{str(value)[:80]}...'")
-                            translated_value = get_translation_from_api(value, context_log, args)
+                            # Passa il contesto del file
+                            translated_value = get_translation_from_api(value, context_log, args, dynamic_context=file_context)
                             obj[key] = translated_value
                             print(f"    Tradotto:  '{str(translated_value)[:80]}...'")
                             if args.translation_only_output:
@@ -561,7 +705,8 @@ def traduci_testo_json(input_file, output_file, args):
                             context_log = f"JSON '{file_basename}', Chiave: '{current_path_for_log}'"
                             print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path_for_log}':")
                             print(f"    Originale: '{str(value)[:80]}...'")
-                            translated_value = get_translation_from_api(value, context_log, args)
+                            # Passa il contesto del file
+                            translated_value = get_translation_from_api(value, context_log, args, dynamic_context=file_context)
                             obj[key] = translated_value
                             print(f"    Tradotto:  '{str(translated_value)[:80]}...'")
                             if args.translation_only_output:
@@ -597,6 +742,7 @@ def traduci_testo_json(input_file, output_file, args):
         except Exception as e:
             log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
 
+# --- FUNZIONE TRADUCI_TESTO_CSV AGGIORNATA ---
 def traduci_testo_csv(input_file, output_file, args):
     """Elabora un singolo file CSV."""
     file_basename = os.path.basename(input_file)
@@ -613,6 +759,25 @@ def traduci_testo_csv(input_file, output_file, args):
     header = rows[0] if rows else None
     data_rows = rows[1:] if header else rows
     
+    # --- Generazione Contesto File (CSV) ---
+    file_context = None
+    if args.enable_file_context: # <-- CHECK FLAG
+        sample_texts = []
+        # NUOVA LOGICA: DETERMINAZIONE DEL LIMITE
+        sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
+        
+        for row in data_rows:
+            if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col]):
+                sample_texts.append(row[args.translate_col])
+                if sample_limit is not None and len(sample_texts) >= sample_limit:
+                    break
+        
+        if sample_texts:
+            print(f"  - Generazione contesto con {'TUTTE' if sample_limit is None else f'le prime {sample_limit}'} frasi ({len(sample_texts)} totali)...")
+            sample_text_for_api = "\n".join(sample_texts)
+            file_context = generate_file_context(sample_text_for_api, file_basename, args)
+    # ----------------------------------------
+    
     texts_to_translate_count = sum(1 for row in data_rows if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col]))
     print(f"Trovate {texts_to_translate_count} righe da tradurre nella colonna {args.translate_col}.")
     processed_count = 0
@@ -627,7 +792,8 @@ def traduci_testo_csv(input_file, output_file, args):
             print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per riga {display_row_num}:")
             print(f"    Originale: '{original_text[:80]}...'")
             
-            translated_text = get_translation_from_api(original_text, context_log, args)
+            # Passa il contesto del file
+            translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=file_context)
             row[args.output_col] = translated_text
             
             print(f"    Tradotto:  '{translated_text[:80]}...'")
