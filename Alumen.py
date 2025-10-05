@@ -470,9 +470,8 @@ def traduci_testo_po(input_file, output_file, args):
                 
                 print(f"    Tradotto:  '{translated_text[:80].replace(chr(10), ' ')}...'")
             else:
-                # Se msgstr è vuoto, copia msgid, anche per testo non traducibile (es. placeholder o chiavi)
                 if entry.msgstr == "":
-                    entry.msgstr = entry.msgid
+                    entry.msgstr = ""
                     
     except KeyboardInterrupt:
         print(f"\n🛑 INTERRUZIONE UTENTE: Salvataggio dei progressi per il file '{file_basename}' in corso...")
