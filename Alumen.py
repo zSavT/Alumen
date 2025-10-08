@@ -498,8 +498,8 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
                 time.sleep(60)
         else:
             time.sleep(15)
+
 # --- NUOVA FUNZIONE HELPER PER ESTRARRE IL CAMPIONE JSON ---
-# La funzione è stata aggiornata per accettare l'argomento 'limit'.
 def _extract_json_sample_texts(obj, keys_to_translate, sample_list, path="", match_full=False, limit=FILE_CONTEXT_SAMPLE_SIZE):
     """Estrae i primi N testi traducibili per la determinazione del contesto JSON. Se 'limit' è None, estrae tutti."""
     if limit is not None and len(sample_list) >= limit: return
@@ -518,7 +518,39 @@ def _extract_json_sample_texts(obj, keys_to_translate, sample_list, path="", mat
             _extract_json_sample_texts(item, keys_to_translate, sample_list, path, match_full, limit)
 
 
-# --- FUNZIONE TRADUCI_TESTO_PO AGGIORNATA ---
+def should_translate_msgctxt(context_string):
+    """
+    Determina se un msgctxt debba essere tradotto.
+    Ritorna False se sembra un ID, una chiave, un tag o contiene caratteri non testuali.
+    """
+    # Utilizza il controllo generale esistente come base
+    if not determine_if_translatable(context_string) or '_' in context_string:
+        return False
+
+    # Controlli specifici aggiuntivi per identificare chiavi o dati non traducibili
+    
+    # 1. Contiene caratteri di tabulazione (es: "1165\tCOMPLEANNO")
+    if '\t' in context_string:
+        return False
+
+    # 2. Contiene tag simili a HTML/XML (es: "<Speaker>Player</Speaker>")
+    if re.search(r'<[a-zA-Z/][^>]*>', context_string):
+        return False
+
+    # 3. È una stringa senza spazi che contiene numeri o una combinazione di maiuscole/minuscole
+    #    (es. "item123", "KeyName"), che suggerisce sia un ID o una variabile.
+    stripped_context = context_string.strip()
+    if ' ' not in stripped_context:
+        has_digits = any(char.isdigit() for char in stripped_context)
+        # islower() e isupper() sono entrambe False se la stringa ha un mix di casi
+        is_mixed_case = not stripped_context.islower() and not stripped_context.isupper()
+
+        if has_digits or is_mixed_case:
+            return False
+    
+    # Se supera tutti i controlli, viene considerato testo traducibile. (Messo a False perchè non dovrebbe mai essere tradotto)
+    return False
+
 def traduci_testo_po(input_file, output_file, args):
     """Elabora un singolo file PO."""
     file_basename = os.path.basename(input_file)
@@ -531,11 +563,8 @@ def traduci_testo_po(input_file, output_file, args):
 
     # --- Generazione Contesto File (PO) ---
     file_context = None
-    if args.enable_file_context: # <-- CHECK FLAG
-        
-        # NUOVA LOGICA: DETERMINAZIONE DEL LIMITE
+    if args.enable_file_context:
         sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
-        
         sample_texts = []
         for entry in po_file:
             if determine_if_translatable(entry.msgid) and '_' not in entry.msgid:
@@ -547,12 +576,11 @@ def traduci_testo_po(input_file, output_file, args):
             print(f"  - Generazione contesto con {'TUTTE' if sample_limit is None else f'le prime {sample_limit}'} frasi ({len(sample_texts)} totali)...")
             sample_text_for_api = "\n".join(sample_texts)
             file_context = generate_file_context(sample_text_for_api, file_basename, args)
-    # ----------------------------------------
 
     texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid) and '_' not in entry.msgid)
     print(f"Trovate {texts_to_translate_count} entry da tradurre nel file (escluse chiavi con '_').")
     processed_count = 0
-    global total_entries_translated # <--- Dichiarazione variabile globale
+    global total_entries_translated
 
     try:
         for entry in po_file:
@@ -565,23 +593,24 @@ def traduci_testo_po(input_file, output_file, args):
 
             original_context = entry.msgctxt
             context_for_prompt = None
-            
-            is_context_translatable = (original_context and 
-                                       determine_if_translatable(original_context) and
-                                       '_' not in original_context)
+            context_is_translatable_prose = should_translate_msgctxt(original_context)
 
-            if is_context_translatable:
+            if context_is_translatable_prose:
+                # Se è testo valido, traducilo
                 print(f"  - Traduzione Contesto...")
                 print(f"    Originale: '{original_context}'")
                 
                 context_log_for_ctxt = f"PO '{file_basename}', Traduzione Contesto, Riga: {entry.linenum}"
-                # Passa file_context per la traduzione di msgctxt (se generato)
                 translated_context = get_translation_from_api(original_context, context_log_for_ctxt, args, dynamic_context=file_context)
                 
                 entry.msgctxt = translated_context
-                context_for_prompt = translated_context
-                total_entries_translated += 1 # <--- INCREMENTO PER CONTESTO
+                context_for_prompt = translated_context # Usa il contesto tradotto per il msgid
+                total_entries_translated += 1
                 print(f"    Tradotto:  '{entry.msgctxt}'")
+            elif original_context:
+                # Se il contesto esiste ma non è traducibile, usalo com'è come informazione
+                print(f"  - Contesto non traducibile, usato come informazione per il testo: '{original_context}'")
+                context_for_prompt = original_context # Usa il contesto originale per il msgid
 
             is_msgid_translatable = (entry.msgid and 
                                      determine_if_translatable(entry.msgid) and
@@ -589,15 +618,16 @@ def traduci_testo_po(input_file, output_file, args):
             
             if is_msgid_translatable:
                 processed_count += 1
-                total_entries_translated += 1 # <--- INCREMENTO PER MSGID
+                total_entries_translated += 1
                 print(f"  - Traduzione Testo ({processed_count}/{texts_to_translate_count})...")
 
-                # NUOVA LOGICA: UNISCE CONTESTO FILE + CONTESTO ENTRY (MSGCTXT)
                 combined_context = []
                 if file_context:
                     combined_context.append(f"Contesto Generale File: {file_context}")
                 if context_for_prompt:
-                    combined_context.append(f"Contesto Specifico Entry (msgctxt tradotto): {context_for_prompt}")
+                    # Aggiorna la descrizione per chiarezza nel log
+                    context_description = "msgctxt tradotto" if context_is_translatable_prose else "da msgctxt"
+                    combined_context.append(f"Contesto Specifico Entry ({context_description}): {context_for_prompt}")
                 
                 final_dynamic_context = " - ".join(combined_context) if combined_context else None
                 
@@ -610,7 +640,6 @@ def traduci_testo_po(input_file, output_file, args):
                 print(f"    Originale: '{original_text[:80].replace(chr(10), ' ')}...'")
                 
                 context_log = f"PO '{file_basename}', Traduzione msgid, Riga: {entry.linenum}"
-                # Passa il contesto combinato
                 translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=final_dynamic_context)
                 entry.msgstr = translated_text
                 
@@ -632,6 +661,7 @@ def traduci_testo_po(input_file, output_file, args):
             log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
             
     print(f"--- Completato PO: {file_basename} ---")
+
 
 # --- FUNZIONE TRADUCI_TESTO_JSON AGGIORNATA ---
 def traduci_testo_json(input_file, output_file, args):
