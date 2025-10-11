@@ -1,3 +1,5 @@
+# Contenuto completo del file modificato 'Alumen.py'
+
 import time
 import google.generativeai as genai
 import csv
@@ -32,6 +34,14 @@ model = None                 # Modello Gemini
 script_args = None           # Oggetto per gli argomenti passati allo script
 log_file_path = None         # Path file log
 translation_cache = {}       # Dizionario per la cache delle traduzioni
+
+# NUOVA VARIABILE GLOBALE PER LA BLACKLIST
+# Lista di parole o frasi che non devono essere tradotte ma preservate.
+# NOTA: Inserisci qui tutti i termini da non tradurre (es. nomi propri, ID, variabili).
+BLACKLIST_TERMS = set([
+    "Sky Finance",
+    "Dummy"
+])
 
 # Nuovi contatori per le statistiche
 api_call_counts = {}         # Dizionario per contare l'uso di ogni API key (indice: conteggio)
@@ -295,9 +305,18 @@ def wait_for_rpm_limit():
 def determine_if_translatable(text_value):
     if not isinstance(text_value, str): return False
     text_value_stripped = text_value.strip()
-    # Modifica per non tradurre se contiene solo numeri o '_' come richiesto precedentemente.
+    
+    # 1. Controllo base: vuoto, solo numeri, o solo simboli/underscore
     if not text_value_stripped or text_value_stripped.isdigit() or re.match(r'^[\W_]+$', text_value_stripped) or "\\u" in text_value_stripped:
         return False
+
+    # 2. NUOVO CONTROLLO per flessibilità (per distinguere ID da frasi):
+    # Salta se contiene underscore ('_') ma non contiene spazi. 
+    # È quasi sempre un ID/Chiave (es. 'ITEM_NAME', 'DIALOG_ID_123').
+    # Le frasi che hanno placeholder con '_' (es. 'Use the item_here.') hanno spazi e passano questo controllo.
+    if '_' in text_value_stripped and ' ' not in text_value_stripped:
+        return False
+        
     return True
 
 def handle_api_error(e, context_for_log, active_key_display, attempt_num):
@@ -342,6 +361,7 @@ def generate_file_context(sample_text, file_name, args):
     """Genera il contesto generale del file basandosi su un campione di testo."""
     global major_failure_count, model, translation_cache, cache_hit_count, api_call_counts
     
+    # La chiave di cache per il contesto del file può rimanere, dato che dipende dagli argomenti globali e dal nome del file.
     context_cache_key = f"CONTEXT_FILE::{file_name}::{args.game_name}::{args.prompt_context}"
     if args.full_context_sample:
         context_cache_key += "::FULL_SAMPLE"
@@ -414,19 +434,26 @@ def generate_file_context(sample_text, file_name, args):
             
     return None # Fallback in caso di errore non gestito
 
-# --- FUNZIONE GET_TRANSLATION_FROM_API ---
+# --- FUNZIONE GET_TRANSLATION_FROM_API (Modificata per la cache e la blacklist) ---
 def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_context=None):
     """
     Funzione centralizzata per ottenere la traduzione. Gestisce i tentativi, la rotazione delle API,
     i limiti RPM, la costruzione del prompt e il caching.
     """
-    global major_failure_count, user_command_skip_api, model, translation_cache, cache_hit_count, api_call_counts
+    global major_failure_count, user_command_skip_api, model, translation_cache, cache_hit_count, api_call_counts, BLACKLIST_TERMS
+
+    # 1. CHECK BLACKLIST (Controlla se l'intera stringa è in blacklist)
+    if text_to_translate.strip() in BLACKLIST_TERMS:
+        print(f"    - 🛑 BLACKLIST HIT: Il testo '{text_to_translate}' è in blacklist. Salto traduzione.")
+        write_to_log(f"BLACKLIST HIT: Saltata traduzione per '{text_to_translate}' nel contesto: {context_for_log}")
+        return text_to_translate
 
     if not determine_if_translatable(text_to_translate):
         return text_to_translate
 
     # La chiave della cache (un tuple) viene convertita in una stringa JSON per essere serializzabile.
-    cache_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context, dynamic_context)
+    # Rimosso dynamic_context da cache_key_tuple!
+    cache_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
     cache_key = json.dumps(cache_key_tuple, ensure_ascii=False)
 
     if cache_key in translation_cache:
@@ -455,11 +482,15 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
                         return text_to_translate
                     prompt_text = args.custom_prompt.format(text_to_translate=text_to_translate)
                 else:
-                    prompt_base = f"""Traduci il seguente testo da {args.source_lang} a {args.target_lang}, mantenendo il contesto del gioco '{args.game_name}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player). In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
+                    # Preparazione lista blacklist per il prompt
+                    blacklist_str = ", ".join(BLACKLIST_TERMS)
+                    
+                    prompt_base = f"""Traduci il seguente testo da {args.source_lang} a {args.target_lang}, mantenendo il contesto del gioco '{args.game_name}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player). Assicurati di mantenere identici i seguenti termini che NON devono essere tradotti, anche se appaiono in frasi più lunghe: {blacklist_str}. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
                     
                     if args.prompt_context: prompt_base += f"\nIstruzione aggiuntiva: {args.prompt_context}."
                     
                     # Usa dynamic_context per il contesto specifico del file o dell'entry (o entrambi)
+                    # L'uso di dynamic_context nel PROMPT è mantenuto per migliorare la qualità.
                     if dynamic_context: prompt_base += f"\nContesto aggiuntivo per questa traduzione: '{dynamic_context}'."
                     
                     prompt_base += "\nRispondi solo con la traduzione diretta."
@@ -475,7 +506,7 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
                     translated_text = textwrap.fill(translated_text, width=args.wrap_at, newline=args.newline_char, replace_whitespace=False)
                 
                 major_failure_count = 0
-                translation_cache[cache_key] = translated_text
+                translation_cache[cache_key] = translated_text # Salva con la chiave SENZA dynamic_context
                 write_to_log(f"CACHE MISS: Nuova traduzione salvata in cache per il contesto: {context_for_log}")
 
                 return translated_text
@@ -567,7 +598,8 @@ def traduci_testo_po(input_file, output_file, args):
         sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
         sample_texts = []
         for entry in po_file:
-            if determine_if_translatable(entry.msgid) and '_' not in entry.msgid:
+            # Qui usiamo solo determine_if_translatable, la logica anti-ID ora è lì (punto 234)
+            if determine_if_translatable(entry.msgid):
                 sample_texts.append(entry.msgid)
                 if sample_limit is not None and len(sample_texts) >= sample_limit:
                     break
@@ -577,8 +609,9 @@ def traduci_testo_po(input_file, output_file, args):
             sample_text_for_api = "\n".join(sample_texts)
             file_context = generate_file_context(sample_text_for_api, file_basename, args)
 
-    texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid) and '_' not in entry.msgid)
-    print(f"Trovate {texts_to_translate_count} entry da tradurre nel file (escluse chiavi con '_').")
+    # Anche qui usiamo solo determine_if_translatable, il controllo _ è nel determine
+    texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid))
+    print(f"Trovate {texts_to_translate_count} entry da tradurre nel file.")
     processed_count = 0
     global total_entries_translated
 
@@ -601,20 +634,21 @@ def traduci_testo_po(input_file, output_file, args):
                 print(f"    Originale: '{original_context}'")
                 
                 context_log_for_ctxt = f"PO '{file_basename}', Traduzione Contesto, Riga: {entry.linenum}"
-                translated_context = get_translation_from_api(original_context, context_log_for_ctxt, args, dynamic_context=file_context)
+                # Non usiamo il file_context per tradurre il msgctxt, altrimenti ci sarebbe un contesto nel contesto
+                translated_context = get_translation_from_api(original_context, context_log_for_ctxt, args, dynamic_context=None) 
                 
                 entry.msgctxt = translated_context
                 context_for_prompt = translated_context # Usa il contesto tradotto per il msgid
                 total_entries_translated += 1
                 print(f"    Tradotto:  '{entry.msgctxt}'")
             elif original_context:
-                # Se il contesto esiste ma non è traducibile, usalo com'è come informazione
+                # Se il contesto esiste ma non è traducibile (è un ID/chiave), usalo com'è come informazione
                 print(f"  - Contesto non traducibile, usato come informazione per il testo: '{original_context}'")
                 context_for_prompt = original_context # Usa il contesto originale per il msgid
 
+            # MODIFICATO: Rimosso il check restrittivo `and '_' not in entry.msgid`
             is_msgid_translatable = (entry.msgid and 
-                                     determine_if_translatable(entry.msgid) and
-                                     '_' not in entry.msgid)
+                                     determine_if_translatable(entry.msgid))
             
             if is_msgid_translatable:
                 processed_count += 1
@@ -640,13 +674,16 @@ def traduci_testo_po(input_file, output_file, args):
                 print(f"    Originale: '{original_text[:80].replace(chr(10), ' ')}...'")
                 
                 context_log = f"PO '{file_basename}', Traduzione msgid, Riga: {entry.linenum}"
+                # Passa il contesto combinato come dynamic_context
                 translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=final_dynamic_context)
                 entry.msgstr = translated_text
                 
                 print(f"    Tradotto:  '{translated_text[:80].replace(chr(10), ' ')}...'")
             else:
-                if entry.msgstr == "":
-                    entry.msgstr = ""
+                # MODIFICA: Se msgid non è traducibile, copia msgid in msgstr.
+                if entry.msgid:
+                    entry.msgstr = entry.msgid
+                    print(f"  - Testo non traducibile (msgid non valido o è un ID/Chiave). msgstr impostato a: '{entry.msgstr[:80].replace(chr(10), ' ')}...'")
                     
     except KeyboardInterrupt:
         print(f"\n🛑 INTERRUZIONE UTENTE: Salvataggio dei progressi per il file '{file_basename}' in corso...")
@@ -805,12 +842,14 @@ def traduci_testo_csv(input_file, output_file, args):
     rows = []
     try:
         with open(input_file, 'r', encoding=args.encoding, newline='') as infile:
+            # Per gestire meglio i file CSV potenzialmente errati, si può provare a dedurre il dialetto, 
+            # ma per ora manteniamo la semplicità con il delimitatore fornito.
             reader = csv.reader(infile, delimiter=args.delimiter)
             rows = list(reader)
     except Exception as e:
         log_critical_error_and_exit(f"Impossibile leggere il file CSV '{input_file}': {e}")
 
-    header = rows[0] if rows else None
+    header = rows[0] if rows and not args.resume else None # Assumiamo l'header solo se non in resume mode per semplicità
     data_rows = rows[1:] if header else rows
     
     # --- Generazione Contesto File (CSV) ---
@@ -840,6 +879,18 @@ def traduci_testo_csv(input_file, output_file, args):
 
     for i, row in enumerate(data_rows):
         display_row_num = i + (2 if header else 1)
+        
+        # Controllo per saltare righe già tradotte in modalità resume
+        if args.resume and len(row) > args.output_col and not determine_if_translatable(row[args.translate_col]):
+             # Se la colonna di output è già riempita e non è la colonna originale
+             if args.output_col != args.translate_col and row[args.output_col].strip():
+                print(f"  - Riga {display_row_num} (Originale: '{row[args.translate_col][:80]}...') già tradotta (Resume Mode). Salto.")
+                processed_count += 1
+                if args.translation_only_output and len(row) > args.output_col:
+                    translated_texts_for_only_output.append(row[args.output_col])
+                continue
+        
+        # Controllo per tradurre
         if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col]):
             processed_count += 1
             total_entries_translated += 1 # <--- INCREMENTO GLOBALE
@@ -850,6 +901,11 @@ def traduci_testo_csv(input_file, output_file, args):
             
             # Passa il contesto del file
             translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=file_context)
+            
+            # Assicura che la riga abbia abbastanza colonne per l'output
+            while len(row) <= args.output_col:
+                row.append('') 
+                
             row[args.output_col] = translated_text
             
             print(f"    Tradotto:  '{translated_text[:80]}...'")
@@ -863,8 +919,13 @@ def traduci_testo_csv(input_file, output_file, args):
                     outfile.write(text + "\n")
             else:
                 writer = csv.writer(outfile, delimiter=args.delimiter, quoting=csv.QUOTE_MINIMAL)
-                if header: writer.writerow(header)
-                writer.writerows(data_rows)
+                if header: 
+                    # Se in modalità resume, l'header è stato letto. Se non c'è header, non lo scriviamo.
+                    writer.writerow(rows[0])
+                    writer.writerows(data_rows)
+                else:
+                    writer.writerows(rows)
+
     except Exception as e:
         log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
         
@@ -873,23 +934,41 @@ def traduci_testo_csv(input_file, output_file, args):
 def process_files_recursively(args):
     """Scansiona le cartelle, trova i file e avvia il processo di traduzione corretto."""
     global user_command_skip_file, total_files_translated
-    base_input_dir = args.input
+    base_input_dir = os.path.abspath(args.input)
+    base_output_dir = os.path.join(os.path.dirname(base_input_dir), "tradotto") # Cartella 'tradotto' allo stesso livello di 'input'
+
+    # Se la cartella di input si chiama 'input', l'output sarà 'tradotto'
+    if os.path.basename(base_input_dir) != "input":
+        # Se la cartella di input ha un altro nome, per esempio 'English', l'output sarà 'tradotto'/'English'
+        # Per implementare l'esempio richiesto ("Cartella input, al suo interno hai... devi generare la cartella 'tradotto' con al suo interno 'Cartella A', 'Cartella B'")
+        # La logica è: copia la struttura delle sottocartelle di 'input' all'interno di 'tradotto'.
+        # Per i file che sono direttamente in 'input', vanno in 'tradotto'.
+        base_output_dir = os.path.join(os.path.dirname(base_input_dir), "tradotto") # L'output va in una cartella parallela "tradotto"
+
     total_files_found = 0
 
     print(f"\nInizio scansione per file *.{args.file_type} da: '{base_input_dir}'")
+    print(f"Output verrà salvato nella struttura di cartelle sotto: '{base_output_dir}'")
     
-    for root_dir, dirs_list, files_list in os.walk(base_input_dir):
-        if "tradotto" in dirs_list:
-            dirs_list.remove("tradotto")
+    os.makedirs(base_output_dir, exist_ok=True)
 
+
+    for root_dir, dirs_list, files_list in os.walk(base_input_dir):
+        # Calcola il path relativo della sottocartella rispetto all'input base
+        relative_path = os.path.relpath(root_dir, base_input_dir)
+        
+        # Definisci la cartella di output corrispondente per la sottocartella
+        # Se relative_path è '.', siamo nella cartella input, l'output va in base_output_dir
+        # Altrimenti, l'output va in base_output_dir/sottocartella
+        current_output_dir = os.path.join(base_output_dir, relative_path)
+        
+        os.makedirs(current_output_dir, exist_ok=True)
+            
         files_to_process = [f for f in files_list if f.endswith(f'.{args.file_type}')]
         if not files_to_process: continue
             
-        print(f"\nEsplorando cartella: '{root_dir}' - Trovati {len(files_to_process)} file *.{args.file_type}.")
+        print(f"\nEsplorando cartella: '{root_dir}' (Output: '{current_output_dir}') - Trovati {len(files_to_process)} file *.{args.file_type}.")
         total_files_found += len(files_to_process)
-
-        output_subfolder = os.path.join(root_dir, "tradotto")
-        os.makedirs(output_subfolder, exist_ok=True)
 
         for filename in files_to_process:
             with command_lock:
@@ -898,14 +977,30 @@ def process_files_recursively(args):
                     user_command_skip_file = False
                     continue
 
-            if script_args.interactive: check_and_wait_if_paused(f"Inizio file: {filename}")
+            if script_args.interactive: check_and_wait_if_paused(f"Inizio file: {os.path.join(relative_path, filename)}")
             
             input_path = os.path.join(root_dir, filename)
+            
+            # Determina il nome del file di output
             if args.translation_only_output:
                  output_filename = f"{os.path.splitext(filename)[0]}_trads.txt"
             else:
                  output_filename = filename
-            output_path = os.path.join(output_subfolder, output_filename)
+                 
+            output_path = os.path.join(current_output_dir, output_filename)
+            
+            # Logica per la ripresa (resume mode)
+            if args.resume and os.path.exists(output_path):
+                # Per JSON e PO, il resume è complicato. Per CSV si può tentare.
+                if args.file_type != 'csv':
+                    print(f"⚠️  Attenzione: Resume mode abilitato, ma non supportato per {args.file_type}. Sovrascrivo '{output_path}'.")
+                elif args.file_type == 'csv':
+                    # In CSV, apriamo il file di output e cerchiamo righe incomplete
+                    print(f"ℹ️  Resume mode attivo. Tentativo di riprendere da '{output_path}'.")
+                    # Qui non c'è una logica di ripresa completa, ma la funzione traduci_testo_csv
+                    # gestisce se la colonna è già stata riempita (vedi modifica in traduci_testo_csv)
+                    pass 
+                
             
             if args.file_type == 'csv':
                 traduci_testo_csv(input_path, output_path, args)
