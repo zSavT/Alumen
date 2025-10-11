@@ -39,7 +39,6 @@ translation_cache = {}       # Dizionario per la cache delle traduzioni
 # Lista di parole o frasi che non devono essere tradotte ma preservate.
 # NOTA: Inserisci qui tutti i termini da non tradurre (es. nomi propri, ID, variabili).
 BLACKLIST_TERMS = set([
-    "Sky Finance",
     "Dummy"
 ])
 
