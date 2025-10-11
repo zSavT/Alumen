@@ -32,10 +32,11 @@
 * **Supporto File Multiplo:** Elabora file `.csv`, `.json`, e `.po` (formato Gettext).
 * **Traduzione Contesto-Consapevole:** Utilizza Gemini per traduzioni che mantengono il contesto del videogioco, preservando tag e placeholder.
 * **Gestione API Avanzata:** Supporta la fornitura di chiavi multiple e la **rotazione automatica della chiave** in caso di errori o limiti RPM.
-* **Contesto Intelligente del File (Novità!):** Analizza il contenuto di ogni file per determinare un contesto generale (es. "Dialoghi di un'ambientazione fantasy") da applicare a tutte le traduzioni di quel file.
+* **Contesto Intelligente del File:** Analizza il contenuto di ogni file per determinare un contesto generale (es. "Dialoghi di un'ambientazione fantasy") da applicare a tutte le traduzioni di quel file.
 * **Cache Persistente:** Salva le traduzioni per evitare chiamate API ripetute, accelerando le esecuzioni successive.
 * **Modalità Interattiva:** Permette di mettere in pausa, riprendere o saltare la chiave API o il file corrente durante l'esecuzione.
 * **Log e Statistiche Dettagliate:** Registra le operazioni su file di log e fornisce un riepilogo statistico completo alla fine.
+* **BlackList termini da non tradurre:** Possibilità di aggiungere nel set dello script parole o frasi da non tradurre.
 
 # Storia\Creazione Progetto
 
