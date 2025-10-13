@@ -35,12 +35,15 @@ script_args = None           # Oggetto per gli argomenti passati allo script
 log_file_path = None         # Path file log
 translation_cache = {}       # Dizionario per la cache delle traduzioni
 
-# NUOVA VARIABILE GLOBALE PER LA BLACKLIST
 # Lista di parole o frasi che non devono essere tradotte ma preservate.
 # NOTA: Inserisci qui tutti i termini da non tradurre (es. nomi propri, ID, variabili).
 BLACKLIST_TERMS = set([
-    "Dummy"
+    "Dummy",
+    "dummy"
 ])
+
+# Variabile Globale per la blacklist delle API
+blacklisted_api_key_indices = set() # Set di indici delle API key considerate esaurite (token finiti, ecc.)
 
 # Nuovi contatori per le statistiche
 api_call_counts = {}         # Dizionario per contare l'uso di ogni API key (indice: conteggio)
@@ -50,6 +53,8 @@ start_time = 0.0             # Tempo di inizio esecuzione
 total_files_translated = 0   # Contatore per i file tradotti
 total_entries_translated = 0 # Contatore per le frasi/entry tradotte
 
+# Gestione Cache e Stato Salvataggio
+last_cache_save_time = 0.0 # Timestamp dell'ultimo salvataggio cache 
 
 # Gestione RPM (Richieste Per Minuto)
 rpm_limit = None             # Limite massimo RPM (Valorizzato solo nell'arg)
@@ -218,33 +223,106 @@ def initialize_api_keys_and_model():
         print(f"INFO: Limite RPM impostato a: {rpm_limit} richieste/minuto.")
     print("-" * 50)
 
+def add_api_key(new_key):
+    """Aggiunge una nuova API key in runtime."""
+    global available_api_keys, api_call_counts, blacklisted_api_key_indices
+    new_key = new_key.strip()
+    if not new_key:
+        print("   ERRORE: La chiave API non può essere vuota.")
+        return False
+    if new_key in available_api_keys:
+        print("   INFO: Questa API key è già presente nella lista.")
+        return False
+
+    # Aggiungi la nuova chiave e inizializza il suo contatore
+    available_api_keys.append(new_key)
+    new_index = len(available_api_keys) - 1
+    api_call_counts[new_index] = 0
+    
+    # Rimuovi l'indice dalla blacklist se per qualche motivo era presente (non dovrebbe)
+    blacklisted_api_key_indices.discard(new_index)
+    
+    print(f"   ✅ API Key ...{new_key[-4:]} aggiunta con successo. Totale: {len(available_api_keys)} keys.")
+    write_to_log(f"COMANDO INTERATTIVO: Aggiunta nuova API Key ...{new_key[-4:]}")
+    return True
+
 
 def rotate_api_key(triggered_by_user=False, reason_override=None):
-    global current_api_key_index, major_failure_count, model
-    if len(available_api_keys) <= 1:
-        print("⚠️  Solo una API key disponibile. Impossibile ruotare.")
+    global current_api_key_index, major_failure_count, model, blacklisted_api_key_indices 
+    
+    usable_keys_count = len(available_api_keys) - len(blacklisted_api_key_indices)
+    
+    # Modificato check per una sola chiave utilizzabile (se la chiave attuale non è blacklisted)
+    if usable_keys_count <= 1 and current_api_key_index not in blacklisted_api_key_indices:
+        print("⚠️  Solo una API key utilizzabile disponibile. Impossibile ruotare.")
         return False
+    
+    if usable_keys_count == 0:
+        print("🛑 ERRORE CRITICO: Tutte le API key sono state blacklisted. Impossibile proseguire.")
+        write_to_log("ERRORE CRITICO: Tutte le API key sono state blacklisted.")
+        return False
+
     previous_key_index = current_api_key_index
-    current_api_key_index = (current_api_key_index + 1) % len(available_api_keys)
+    initial_index = current_api_key_index
+    
+    # Loop per trovare la prossima chiave non blacklisted
+    while True:
+        current_api_key_index = (current_api_key_index + 1) % len(available_api_keys)
+        
+        if current_api_key_index not in blacklisted_api_key_indices:
+            break
+            
+        if current_api_key_index == initial_index:
+            # Rotazione completa senza successo
+            print("🛑 ERRORE CRITICO: Impossibile trovare una API key non blacklisted.")
+            write_to_log("ERRORE CRITICO: Impossibile trovare una API key non blacklisted.")
+            # Ripristinare l'indice precedente se si è fallito e l'indice precedente non era blacklisted
+            if previous_key_index not in blacklisted_api_key_indices:
+                current_api_key_index = previous_key_index
+            return False # Nessuna chiave utilizzabile trovata
+
     new_api_key = available_api_keys[current_api_key_index]
     trigger_reason = reason_override if reason_override else ("Comando utente." if triggered_by_user else f"Soglia fallimenti raggiunta.")
     print(f"INFO: Rotazione API key ({trigger_reason})...")
     try:
         genai.configure(api_key=new_api_key)
         model = genai.GenerativeModel(script_args.model_name)
-        print(f"✅ API key ruotata e modello '{script_args.model_name}' riconfigurato.")
+        print(f"✅ API key ruotata e modello '{script_args.model_name}' riconfigurato. Nuova Key: ...{new_api_key[-4:]}")
         major_failure_count = 0
         return True
     except Exception as e:
         print(f"❌ ERRORE: Configurazione nuova API Key fallita: {e}")
-        current_api_key_index = previous_key_index
-        try:
-            genai.configure(api_key=available_api_keys[previous_key_index])
-            model = genai.GenerativeModel(script_args.model_name)
-            print("✅ API Key precedente ripristinata.")
-        except Exception as e_revert:
-             log_critical_error_and_exit(f"Errore nel ripristino della API Key precedente: {e_revert}.")
+        # Gestione fallimento: ripristina la chiave precedente se non blacklisted, altrimenti fallisce.
+        if previous_key_index not in blacklisted_api_key_indices:
+            current_api_key_index = previous_key_index
+            try:
+                genai.configure(api_key=available_api_keys[previous_key_index])
+                model = genai.GenerativeModel(script_args.model_name)
+                print("✅ API Key precedente ripristinata.")
+            except Exception as e_revert:
+                log_critical_error_and_exit(f"Errore nel ripristino della API Key precedente: {e_revert}.")
+        else:
+            print("🛑 ERRORE CRITICO: Fallita rotazione API e la chiave precedente è blacklisted. Nessuna chiave utilizzabile.")
+            log_critical_error_and_exit("Fallita rotazione API e la chiave precedente è blacklisted. Nessuna chiave utilizzabile.")
+
         return False
+
+def blacklist_current_api_key():
+    """Aggiunge l'indice della chiave API corrente alla lista nera e tenta una rotazione."""
+    global current_api_key_index, blacklisted_api_key_indices
+    
+    if current_api_key_index in blacklisted_api_key_indices:
+        print(f"   INFO: L'API Key ...{available_api_keys[current_api_key_index][-4:]} è già nella lista nera.")
+        return False
+        
+    blacklisted_api_key_indices.add(current_api_key_index)
+    key_suffix = available_api_keys[current_api_key_index][-4:]
+    print(f"   ✅ COMANDO RICEVUTO: API Key ...{key_suffix} aggiunta alla lista nera (token esauriti).")
+    write_to_log(f"COMANDO INTERATTIVO: API Key ...{key_suffix} aggiunta alla lista nera.")
+    
+    # Tenta immediatamente la rotazione
+    return rotate_api_key(triggered_by_user=True, reason_override="Key blacklisted (Token Exhausted)")
+
 
 def animazione_caricamento(stop_event):
     for simbolo in itertools.cycle(['|', '/', '-', '\\']):
@@ -253,6 +331,42 @@ def animazione_caricamento(stop_event):
         sys.stdout.flush()
         time.sleep(0.2)
     sys.stdout.write("\r" + " " * 40 + "\r")
+
+def show_stats():
+    """Visualizza le statistiche attuali."""
+    end_time = time.time()
+    total_time = end_time - start_time
+    total_api_calls = sum(api_call_counts.values())
+    
+    avg_time_per_file = 0.0
+    if total_files_translated > 0:
+        avg_time_per_file = total_time / total_files_translated
+        
+    print("\n\n" + "=" * 50)
+    print("      STATISTICHE ATTUALI (Interattiva)")
+    print("=" * 50)
+    
+    print(f"⏳ Tempo Trascorso:            {format_time_delta(total_time)}")
+    print(f"✅ File Tradotti:              {total_files_translated}")
+    print(f"✅ Frasi/Entry Tradotte:       {total_entries_translated}")
+    if total_files_translated > 0:
+        print(f"⏱️  Tempo Medio per File:       {format_time_delta(avg_time_per_file)}")
+    
+    print(f"\n➡️  Cache Hit Totali: {cache_hit_count}")
+    print(f"➡️  API Call Totali:  {total_api_calls}")
+    
+    print("\n--- Dettaglio API Key ---")
+    for i, count in api_call_counts.items():
+        key_suffix = available_api_keys[i][-4:]
+        status = "(ATTIVA)" if i == current_api_key_index else ""
+        
+        # Indicazione Blacklist
+        if i in blacklisted_api_key_indices: 
+            status = "(BLACKLISTED - Token Finiti)" 
+            
+        print(f"    - Key ...{key_suffix} {status}: {count} chiamate")
+    print("-" * 50)
+
 
 def command_input_thread_func():
     global user_command_skip_api, user_command_skip_file, script_is_paused
@@ -263,15 +377,56 @@ def command_input_thread_func():
     while True:
         try:
             prompt_indicator = "(In Pausa) " if not script_is_paused.is_set() else ""
-            command = input(f"Alumen Interattivo {prompt_indicator}> ").strip().lower()
+            command_line = input(f"Alumen Interattivo {prompt_indicator}> ").strip()
+            command_parts = command_line.lower().split(maxsplit=2)
+            command = command_parts[0] if command_parts else ""
+            sub_command = command_parts[1] if len(command_parts) > 1 else ""
+
             with command_lock:
-                if command == "skip api": user_command_skip_api = True; print("   COMANDO RICEVUTO: 'skip api'.")
-                elif command == "skip file": user_command_skip_file = True; print("   COMANDO RICEVUTO: 'skip file'.")
-                elif command == "pause": script_is_paused.clear(); print("   COMANDO RICEVUTO: 'pause'.")
-                elif command == "resume": script_is_paused.set(); print("   COMANDO RICEVUTO: 'resume'.")
-                elif command == "help": print("\n   Comandi: pause, resume, skip api, skip file, exit/quit\n")
-                elif command in ["exit", "quit"]: print("   INFO: Thread input comandi terminato."); break
-                elif command: print(f"   Comando non riconosciuto: '{command}'. Digita 'help'.")
+                if command == "skip":
+                    if sub_command == "api":
+                        user_command_skip_api = True; print("   COMANDO RICEVUTO: 'skip api'.")
+                    elif sub_command == "file":
+                        user_command_skip_file = True; print("   COMANDO RICEVUTO: 'skip file'.")
+                    else:
+                        print("   Comando 'skip' non valido. Usa 'skip api' o 'skip file'.")
+                elif command == "pause": 
+                    script_is_paused.clear(); print("   COMANDO RICEVUTO: 'pause'.")
+                elif command == "resume": 
+                    script_is_paused.set(); print("   COMANDO RICEVUTO: 'resume'.")
+                elif command == "stats":
+                    show_stats(); print("   COMANDO RICEVUTO: 'stats'.")
+                elif command == "add":
+                    if sub_command == "api" and len(command_parts) > 2:
+                        new_key = command_parts[2].strip()
+                        add_api_key(new_key)
+                    else:
+                         print("   Comando 'add' non valido. Usa 'add api <chiave_api>'.")
+                elif command == "exhausted":
+                    blacklist_current_api_key()
+                # NUOVO COMANDO INTERATTIVO PER IL SALVATAGGIO DELLA CACHE
+                elif command == "save" or (command == "salva" and sub_command == "cache"):
+                    if script_args.persistent_cache:
+                        print("   COMANDO RICEVUTO: 'save cache'. Salvataggio cache in corso...")
+                        save_persistent_cache()
+                        print("   ✅ Salvataggio cache completato.")
+                    else:
+                        print(f"   ⚠️  Attenzione: La cache persistente è disabilitata. Usa --persistent-cache all'avvio dello script.")
+                # FINE NUOVO COMANDO
+                elif command == "help": 
+                    print("\n   Comandi:")
+                    print("     pause: Mette in pausa l'elaborazione.")
+                    print("     resume: Riprende l'elaborazione.")
+                    print("     skip api: Salta l'attuale API key e ruota alla successiva.")
+                    print("     skip file: Salta l'elaborazione del file corrente.")
+                    print("     stats: Mostra le statistiche attuali di esecuzione.")
+                    print("     add api <chiave>: Aggiunge una nuova chiave API in runtime.")
+                    print("     exhausted: Mette nella lista nera (blacklist) l'API key attualmente in uso (es. token finiti) e ruota alla successiva.")
+                    print("     save cache / salva cache: Salva immediatamente la cache di traduzione su file (necessita --persistent-cache).") # AGGIORNATO
+                    print("     exit/quit: Termina la console interattiva.")
+                    print("\n")
+                elif command: 
+                    print(f"   Comando non riconosciuto: '{command}'. Digita 'help'.")
         except (EOFError, KeyboardInterrupt): print("\nINFO: Chiusura console interattiva."); break
         except Exception as e: print(f"🛑 Errore nel thread input comandi: {e}"); break
         
@@ -309,10 +464,8 @@ def determine_if_translatable(text_value):
     if not text_value_stripped or text_value_stripped.isdigit() or re.match(r'^[\W_]+$', text_value_stripped) or "\\u" in text_value_stripped:
         return False
 
-    # 2. NUOVO CONTROLLO per flessibilità (per distinguere ID da frasi):
+    # 2. Controllo per flessibilità (per distinguere ID da frasi):
     # Salta se contiene underscore ('_') ma non contiene spazi. 
-    # È quasi sempre un ID/Chiave (es. 'ITEM_NAME', 'DIALOG_ID_123').
-    # Le frasi che hanno placeholder con '_' (es. 'Use the item_here.') hanno spazi e passano questo controllo.
     if '_' in text_value_stripped and ' ' not in text_value_stripped:
         return False
         
@@ -328,8 +481,8 @@ def handle_api_error(e, context_for_log, active_key_display, attempt_num):
     return retry_delay_seconds
 
 def load_persistent_cache():
-    """Carica la cache delle traduzioni da file se l'opzione è attiva."""
-    global translation_cache, script_args
+    """Carica la cache delle traduzioni da file se l'opzione è attiva e imposta il tempo di salvataggio iniziale."""
+    global translation_cache, script_args, last_cache_save_time
     if not script_args.persistent_cache:
         return
     try:
@@ -337,23 +490,45 @@ def load_persistent_cache():
             with open(CACHE_FILE_NAME, 'r', encoding='utf-8') as f:
                 translation_cache = json.load(f)
             print(f"✅ Cache persistente caricata da '{CACHE_FILE_NAME}' con {len(translation_cache)} voci.")
+            last_cache_save_time = time.time() # Imposta il tempo di salvataggio al momento del caricamento
         else:
             print(f"ℹ️  File cache '{CACHE_FILE_NAME}' non trovato. Verrà creato a fine esecuzione.")
+            last_cache_save_time = 0.0
     except (json.JSONDecodeError, IOError) as e:
         print(f"⚠️  Attenzione: Impossibile caricare la cache da '{CACHE_FILE_NAME}': {e}. La cache verrà ricreata.")
         translation_cache = {}
+        last_cache_save_time = 0.0
 
 def save_persistent_cache():
-    """Salva la cache delle traduzioni su file se l'opzione è attiva."""
-    global translation_cache, script_args
+    """Salva la cache delle traduzioni su file se l'opzione è attiva e aggiorna il timestamp."""
+    global translation_cache, script_args, last_cache_save_time
     if not script_args.persistent_cache or not translation_cache:
+        if script_args.persistent_cache:
+            # Se la cache è abilitata ma vuota, e viene chiamato esplicitamente, lo notifichiamo.
+            if not translation_cache:
+                print("\nℹ️  Salvataggio cache ignorato: la cache di traduzione è attualmente vuota.")
+            # Se la cache non è abilitata, il messaggio è gestito dal chiamante (o semplicemente ritorna in silenzio)
         return
     try:
         with open(CACHE_FILE_NAME, 'w', encoding='utf-8') as f:
             json.dump(translation_cache, f, ensure_ascii=False, indent=4)
         print(f"\n✅ Cache di traduzione ({len(translation_cache)} voci) salvata in '{CACHE_FILE_NAME}'.")
+        last_cache_save_time = time.time() # Aggiorna il timestamp di salvataggio
     except IOError as e:
         print(f"\n❌ ERRORE: Impossibile salvare la cache in '{CACHE_FILE_NAME}': {e}")
+
+def check_and_save_cache():
+    """Salva la cache se sono trascorsi 10 minuti (600 secondi) dall'ultimo salvataggio."""
+    global last_cache_save_time, script_args
+    if not script_args.persistent_cache:
+        return
+        
+    current_time = time.time()
+    if current_time - last_cache_save_time >= 600: # 10 minutes = 600 seconds
+        print("\nℹ️  Salvataggio cache periodico (10 minuti) in corso...")
+        write_to_log("Salvataggio cache periodico (10 minuti) attivato.")
+        save_persistent_cache()
+
 
 # --- FUNZIONE PER LA GENERAZIONE DEL CONTESTO DEL FILE ---
 def generate_file_context(sample_text, file_name, args):
@@ -484,12 +659,12 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
                     # Preparazione lista blacklist per il prompt
                     blacklist_str = ", ".join(BLACKLIST_TERMS)
                     
-                    prompt_base = f"""Traduci il seguente testo da {args.source_lang} a {args.target_lang}, mantenendo il contesto del gioco '{args.game_name}' e preservando eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player). Assicurati di mantenere identici i seguenti termini che NON devono essere tradotti, anche se appaiono in frasi più lunghe: {blacklist_str}. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
+                    # MODIFICA: Aggiunta istruzione per preservare gli a capo.
+                    prompt_base = f"""Traduci il seguente testo da {args.source_lang} a {args.target_lang}, mantenendo il contesto del gioco '{args.game_name}'. ISTRUZIONE CRITICA: preserva esattamente tutti gli a capo originali (come `\\n` o `\\r\\n`) presenti nel testo. Inoltre, preserva eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player). Assicurati di mantenere identici i seguenti termini che NON devono essere tradotti, anche se appaiono in frasi più lunghe: {blacklist_str}. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."""
                     
                     if args.prompt_context: prompt_base += f"\nIstruzione aggiuntiva: {args.prompt_context}."
                     
                     # Usa dynamic_context per il contesto specifico del file o dell'entry (o entrambi)
-                    # L'uso di dynamic_context nel PROMPT è mantenuto per migliorare la qualità.
                     if dynamic_context: prompt_base += f"\nContesto aggiuntivo per questa traduzione: '{dynamic_context}'."
                     
                     prompt_base += "\nRispondi solo con la traduzione diretta."
@@ -597,7 +772,7 @@ def traduci_testo_po(input_file, output_file, args):
         sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
         sample_texts = []
         for entry in po_file:
-            # Qui usiamo solo determine_if_translatable, la logica anti-ID ora è lì (punto 234)
+            # Qui usiamo solo determine_if_translatable, la logica anti-ID ora è lì
             if determine_if_translatable(entry.msgid):
                 sample_texts.append(entry.msgid)
                 if sample_limit is not None and len(sample_texts) >= sample_limit:
@@ -608,7 +783,6 @@ def traduci_testo_po(input_file, output_file, args):
             sample_text_for_api = "\n".join(sample_texts)
             file_context = generate_file_context(sample_text_for_api, file_basename, args)
 
-    # Anche qui usiamo solo determine_if_translatable, il controllo _ è nel determine
     texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid))
     print(f"Trovate {texts_to_translate_count} entry da tradurre nel file.")
     processed_count = 0
@@ -645,7 +819,6 @@ def traduci_testo_po(input_file, output_file, args):
                 print(f"  - Contesto non traducibile, usato come informazione per il testo: '{original_context}'")
                 context_for_prompt = original_context # Usa il contesto originale per il msgid
 
-            # MODIFICATO: Rimosso il check restrittivo `and '_' not in entry.msgid`
             is_msgid_translatable = (entry.msgid and 
                                      determine_if_translatable(entry.msgid))
             
@@ -679,7 +852,7 @@ def traduci_testo_po(input_file, output_file, args):
                 
                 print(f"    Tradotto:  '{translated_text[:80].replace(chr(10), ' ')}...'")
             else:
-                # MODIFICA: Se msgid non è traducibile, copia msgid in msgstr.
+                # Se msgid non è traducibile, copia msgid in msgstr.
                 if entry.msgid:
                     entry.msgstr = entry.msgid
                     print(f"  - Testo non traducibile (msgid non valido o è un ID/Chiave). msgstr impostato a: '{entry.msgstr[:80].replace(chr(10), ' ')}...'")
@@ -693,6 +866,7 @@ def traduci_testo_po(input_file, output_file, args):
         try:
             po_file.save(output_file)
             print(f"✅ Salvataggio dati in '{output_file}' completato.")
+            save_persistent_cache() # Save cache after file completion
         except Exception as e:
             log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
             
@@ -715,12 +889,12 @@ def traduci_testo_json(input_file, output_file, args):
     
     # --- Generazione Contesto File (JSON) ---
     file_context = None
-    if args.enable_file_context: # <-- CHECK FLAG
+    if args.enable_file_context: # CHECK FLAG
         sample_texts = []
         # NUOVA LOGICA: DETERMINAZIONE DEL LIMITE
         sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
         
-        _extract_json_sample_texts(data, keys_to_translate, sample_texts, match_full=args.match_full_json_path, limit=sample_limit)
+        _extract_json_sample_texts(data, keys_to_translate, sample_texts, path="", match_full=args.match_full_json_path, limit=sample_limit) # Corretto sample_list in sample_texts
 
         if sample_texts:
             print(f"  - Generazione contesto con {'TUTTE' if sample_limit is None else f'le prime {sample_limit}'} frasi ({len(sample_texts)} totali)...")
@@ -731,7 +905,7 @@ def traduci_testo_json(input_file, output_file, args):
     try:
         texts_to_translate_count = 0
         processed_count = 0
-        global total_entries_translated # <--- Dichiarazione variabile globale
+        global total_entries_translated # Dichiarazione variabile globale
 
         if args.match_full_json_path:
             print("ℹ️  Modalità traduzione JSON con corrispondenza percorso completo abilitata.")
@@ -755,7 +929,7 @@ def traduci_testo_json(input_file, output_file, args):
                         current_path = f"{path}.{key}" if path else key
                         if current_path in keys_to_translate and determine_if_translatable(value):
                             processed_count += 1
-                            total_entries_translated += 1 # <--- INCREMENTO GLOBALE
+                            total_entries_translated += 1 # INCREMENTO GLOBALE
                             context_log = f"JSON '{file_basename}', Chiave: '{current_path}'"
                             print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path}':")
                             print(f"    Originale: '{str(value)[:80]}...'")
@@ -790,7 +964,7 @@ def traduci_testo_json(input_file, output_file, args):
                     for key, value in list(obj.items()):
                         if key in keys_to_translate and determine_if_translatable(value):
                             processed_count += 1
-                            total_entries_translated += 1 # <--- INCREMENTO GLOBALE
+                            total_entries_translated += 1 # INCREMENTO GLOBALE
                             current_path_for_log = f"{path}.{key}" if path else key
                             context_log = f"JSON '{file_basename}', Chiave: '{current_path_for_log}'"
                             print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per '{current_path_for_log}':")
@@ -829,6 +1003,7 @@ def traduci_testo_json(input_file, output_file, args):
                 else:
                     json.dump(data, f, ensure_ascii=False, indent=4)
             print(f"✅ Salvataggio dati in '{output_file}' completato.")
+            save_persistent_cache() # Save cache after file completion
         except Exception as e:
             log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
 
@@ -853,7 +1028,7 @@ def traduci_testo_csv(input_file, output_file, args):
     
     # --- Generazione Contesto File (CSV) ---
     file_context = None
-    if args.enable_file_context: # <-- CHECK FLAG
+    if args.enable_file_context: # CHECK FLAG
         sample_texts = []
         # NUOVA LOGICA: DETERMINAZIONE DEL LIMITE
         sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
@@ -874,7 +1049,7 @@ def traduci_testo_csv(input_file, output_file, args):
     print(f"Trovate {texts_to_translate_count} righe da tradurre nella colonna {args.translate_col}.")
     processed_count = 0
     translated_texts_for_only_output = []
-    global total_entries_translated # <--- Dichiarazione variabile globale
+    global total_entries_translated # Dichiarazione variabile globale
 
     for i, row in enumerate(data_rows):
         display_row_num = i + (2 if header else 1)
@@ -892,7 +1067,7 @@ def traduci_testo_csv(input_file, output_file, args):
         # Controllo per tradurre
         if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col]):
             processed_count += 1
-            total_entries_translated += 1 # <--- INCREMENTO GLOBALE
+            total_entries_translated += 1 # INCREMENTO GLOBALE
             original_text = row[args.translate_col]
             context_log = f"CSV '{file_basename}', Riga: {display_row_num}"
             print(f"\n  ({processed_count}/{texts_to_translate_count}) Traduzione per riga {display_row_num}:")
@@ -919,12 +1094,13 @@ def traduci_testo_csv(input_file, output_file, args):
             else:
                 writer = csv.writer(outfile, delimiter=args.delimiter, quoting=csv.QUOTE_MINIMAL)
                 if header: 
-                    # Se in modalità resume, l'header è stato letto. Se non c'è header, non lo scriviamo.
                     writer.writerow(rows[0])
                     writer.writerows(data_rows)
                 else:
                     writer.writerows(rows)
-
+        
+        print(f"✅ Salvataggio dati in '{output_file}' completato.")
+        save_persistent_cache() # Save cache after file completion
     except Exception as e:
         log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
         
@@ -938,10 +1114,6 @@ def process_files_recursively(args):
 
     # Se la cartella di input si chiama 'input', l'output sarà 'tradotto'
     if os.path.basename(base_input_dir) != "input":
-        # Se la cartella di input ha un altro nome, per esempio 'English', l'output sarà 'tradotto'/'English'
-        # Per implementare l'esempio richiesto ("Cartella input, al suo interno hai... devi generare la cartella 'tradotto' con al suo interno 'Cartella A', 'Cartella B'")
-        # La logica è: copia la struttura delle sottocartelle di 'input' all'interno di 'tradotto'.
-        # Per i file che sono direttamente in 'input', vanno in 'tradotto'.
         base_output_dir = os.path.join(os.path.dirname(base_input_dir), "tradotto") # L'output va in una cartella parallela "tradotto"
 
     total_files_found = 0
@@ -957,8 +1129,6 @@ def process_files_recursively(args):
         relative_path = os.path.relpath(root_dir, base_input_dir)
         
         # Definisci la cartella di output corrispondente per la sottocartella
-        # Se relative_path è '.', siamo nella cartella input, l'output va in base_output_dir
-        # Altrimenti, l'output va in base_output_dir/sottocartella
         current_output_dir = os.path.join(base_output_dir, relative_path)
         
         os.makedirs(current_output_dir, exist_ok=True)
@@ -970,6 +1140,9 @@ def process_files_recursively(args):
         total_files_found += len(files_to_process)
 
         for filename in files_to_process:
+            
+            check_and_save_cache() # Periodic cache check
+
             with command_lock:
                 if user_command_skip_file:
                     print(f"COMANDO 'skip file' ricevuto. Salto file '{filename}'.")
@@ -990,14 +1163,10 @@ def process_files_recursively(args):
             
             # Logica per la ripresa (resume mode)
             if args.resume and os.path.exists(output_path):
-                # Per JSON e PO, il resume è complicato. Per CSV si può tentare.
                 if args.file_type != 'csv':
                     print(f"⚠️  Attenzione: Resume mode abilitato, ma non supportato per {args.file_type}. Sovrascrivo '{output_path}'.")
                 elif args.file_type == 'csv':
-                    # In CSV, apriamo il file di output e cerchiamo righe incomplete
                     print(f"ℹ️  Resume mode attivo. Tentativo di riprendere da '{output_path}'.")
-                    # Qui non c'è una logica di ripresa completa, ma la funzione traduci_testo_csv
-                    # gestisce se la colonna è già stata riempita (vedi modifica in traduci_testo_csv)
                     pass 
                 
             
@@ -1008,7 +1177,7 @@ def process_files_recursively(args):
             elif args.file_type == 'po':
                 traduci_testo_po(input_path, output_path, args)
                 
-            total_files_translated += 1 # <--- INCREMENTO FILE CONTATORE
+            total_files_translated += 1 # INCREMENTO FILE CONTATORE
 
 
 if __name__ == "__main__":
@@ -1042,38 +1211,10 @@ if __name__ == "__main__":
         if cmd_thread and cmd_thread.is_alive():
             print("INFO: Thread input comandi attivo (terminerà con lo script).")
             
-        save_persistent_cache()  # Salva la cache prima di terminare
+        save_persistent_cache()  # Salvataggio finale garantito
         
-        # --- STATISTICHE FINALI ---
-        end_time = time.time()
-        total_time = end_time - start_time
-        
-        total_api_calls = sum(api_call_counts.values())
-        
-        avg_time_per_file = 0.0
-        if total_files_translated > 0:
-            avg_time_per_file = total_time / total_files_translated
 
-        print("\n\n" + "=" * 50)
-        print("         RIEPILOGO STATISTICHE FINALI")
-        print("=" * 50)
-        
-        print(f"📊 Tempo Totale di Esecuzione: {format_time_delta(total_time)}")
-        if total_files_translated > 0:
-            print(f"📊 Tempo Medio per File:       {format_time_delta(avg_time_per_file)}")
-        print(f"📊 File Tradotti:              {total_files_translated}")
-        print(f"📊 Frasi/Entry Tradotte:       {total_entries_translated}")
-        
-        print(f"\n➡️  Cache Hit Totali: {cache_hit_count}")
-        print(f"➡️  API Call Totali:  {total_api_calls}")
-        
-        print("\n--- Dettaglio Utilizzo API Key ---")
-        for i, count in api_call_counts.items():
-            key_suffix = available_api_keys[i][-4:]
-            print(f"    - API Key ...{key_suffix}: {count} chiamate")
-            
-        print("-" * 50)
-        # --- FINE STATISTICHE FINALI ---
+        show_stats()
 
         write_to_log(f"--- FINE Sessione Log: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
         print("\nScript Alumen terminato.")
