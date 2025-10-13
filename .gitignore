@@ -175,3 +175,7 @@ cython_debug/
 
 # Extra
 api_key.txt
+Input/*
+tradotto/*
+alumen_cache.json
+log.txt
