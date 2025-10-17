@@ -54,8 +54,8 @@ script_is_paused = Event()
 command_lock = Lock()
 graceful_exit_requested = Event()
 current_file_context = None
-current_file_total_entries = 0  # NUOVO: Conteggio totale entry nel file corrente
-current_file_processed_entries = 0 # NUOVO: Conteggio entry elaborate nel file corrente
+current_file_total_entries = 0
+current_file_processed_entries = 0
 
 ALUMEN_ASCII_ART = """
 
@@ -104,7 +104,7 @@ def get_script_args_updated():
     translation_group.add_argument("--full-context-sample", action="store_true", help="\033[97m[Necessita --enable-file-context] Utilizza TUTTE le frasi valide nel file (anziché solo le prime 15) per generare il contesto generale. Attenzione: può risultare in richieste API molto grandi.\033[0m")
     wrapping_group.add_argument("--wrap-at", type=int, default=None, help="\033[97mLunghezza massima della riga per a capo automatico.\033[0m")
     wrapping_group.add_argument("--newline-char", type=str, default='\\n', help="\033[97mCarattere da usare per l'a capo automatico.\033[0m")
-    utility_group.add_argument("--oneThread", action="store_true", help="\033[97mDisabilita l'animazione di caricamento.\033[0m")
+    utility_group.add_argument("--oneThread", action="store_true", help="\033[97mDisabilita l'animazione di caricamento/progresso. Utile per terminali senza supporto adeguato.")
     utility_group.add_argument("--enable-file-log", action="store_true", help=f"\033[97mAttiva la scrittura di un log ('{LOG_FILE_NAME}').\033[0m")
     utility_group.add_argument("--interactive", action="store_true", help="\033[97mAbilita comandi interattivi.\033[0m")
     utility_group.add_argument("--resume", action="store_true", help="\033[97mTenta di riprendere la traduzione da file parziali.\033[0m")
@@ -205,7 +205,7 @@ def add_api_key(new_key):
     write_to_log(f"COMANDO INTERATTIVO: Aggiunta nuova API Key ...{new_key[-4:]}")
     return True
 
-# --- NUOVE FUNZIONI DI GESTIONE API E PERFORMANCE ---
+# --- FUNZIONI DI GESTIONE API E PERFORMANCE ---
 
 def list_api_keys():
     print("\n--- Elenco Chiavi API Disponibili ---")
@@ -220,14 +220,6 @@ def list_api_keys():
         calls = api_call_counts.get(i, 0)
         print(f"[{i:2}] ...{key_suffix:4} {status:<15} - {calls} chiamate")
     print("-" * 35)
-
-def show_current_api_key():
-    if not available_api_keys:
-        print("   ℹ️  Nessuna chiave API disponibile.")
-        return
-    current_key = available_api_keys[current_api_key_index]
-    key_suffix = current_key[-4:]
-    print(f"   ℹ️  Chiave API Attiva: ...{key_suffix}")
 
 def remove_api_key(index_str):
     global available_api_keys, current_api_key_index, api_call_counts, blacklisted_api_key_indices
@@ -323,14 +315,14 @@ def set_rpm_limit_func(rpm_str):
     except ValueError:
         print("   🛑 ERRORE: Il limite RPM deve essere un numero intero.")
 
-def show_rpm_stats():
+def show_rpm_stats(title="Statistiche RPM"):
     global rpm_limit, rpm_request_timestamps
     current_time = time.time()
     with rpm_lock:
         rpm_request_timestamps[:] = [ts for ts in rpm_request_timestamps if ts > current_time - 60.0]
         current_rpm = len(rpm_request_timestamps)
     limit_display = f"{rpm_limit}/min" if rpm_limit is not None else "Disabilitato"
-    print(f"\n--- Statistiche RPM ---")
+    print(f"\n--- {title} ---")
     print(f"  Limite impostato:  {limit_display}")
     print(f"  Utilizzo ultimi 60s: {current_rpm} chiamate")
     if rpm_limit is not None and rpm_limit > 0:
@@ -398,7 +390,7 @@ def clear_translation_cache_func():
     if script_args.persistent_cache:
         print("   ℹ️  Per svuotare anche la cache su disco, usa il comando 'save cache'.")
 
-# --- FINE NUOVE FUNZIONI ---
+# --- FINE FUNZIONI DI GESTIONE ---
 
 def rotate_api_key(triggered_by_user=False, reason_override=None):
     global current_api_key_index, major_failure_count, model, blacklisted_api_key_indices
@@ -457,12 +449,22 @@ def blacklist_current_api_key():
     return rotate_api_key(triggered_by_user=True, reason_override="Key blacklisted")
 
 def animazione_caricamento(stop_event):
+    # MODIFICA: Mostra il progresso del file
+    global current_file_processed_entries, current_file_total_entries, script_args
     for simbolo in itertools.cycle(['|', '/', '-', '\\']):
         if stop_event.is_set(): break
-        sys.stdout.write(f"\rTraduzione in corso {simbolo} ")
+        
+        progress_info = ""
+        if current_file_total_entries > 0:
+            percent = (current_file_processed_entries / current_file_total_entries) * 100
+            file_type = script_args.file_type.upper() if script_args else "FILE"
+            
+            progress_info = f"[{file_type} {current_file_processed_entries}/{current_file_total_entries} ({percent:.2f}%)] "
+
+        sys.stdout.write(f"\rTraduzione in corso {progress_info}{simbolo} ")
         sys.stdout.flush()
         time.sleep(0.2)
-    sys.stdout.write("\r" + " " * 40 + "\r")
+    sys.stdout.write("\r" + " " * 80 + "\r") # Pulizia
 
 def show_stats(title="STATISTICHE DI ESECUZIONE"):
     end_time = time.time()
@@ -524,7 +526,29 @@ def command_input_thread_func():
                     if sub_command == "api": user_command_skip_api = True; print("   ➡️  Comando ricevuto: salto dell'API corrente in corso...")
                     elif sub_command == "file": user_command_skip_file = True; print("   ➡️  Comando ricevuto: salto del file corrente in corso...")
                     else: print("   ⚠️  Comando non valido. Usa 'skip api' o 'skip file'.")
-                elif command == "pause": script_is_paused.clear(); print("   ⏳ Script in pausa. Digita 'resume' per continuare.")
+                
+                # MODIFICA: Aggiunta stampa automatica delle statistiche su 'pause'
+                elif command == "pause": 
+                    script_is_paused.clear()
+                    
+                    print("\n" + "=" * 50)
+                    print("   ⏳ SCRIPT IN PAUSA. Digita 'resume' per continuare.")
+                    print("=" * 50)
+                    
+                    show_stats(title="STATISTICHE AL MOMENTO DELLA PAUSA")
+                    show_rpm_stats(title="STATISTICHE RPM")
+                    
+                    print("\n--- Contesto File Corrente ---")
+                    if current_file_context:
+                        print(f"'{current_file_context}'")
+                    else:
+                        print("Nessun contesto generato per il file corrente (o funzione non abilitata).")
+                    print("-" * 30)
+
+                    # Ristampa del prompt per non far sembrare che il programma sia bloccato
+                    sys.stdout.write("Alumen Interattivo (In Pausa) > ")
+                    sys.stdout.flush()
+
                 elif command == "resume": script_is_paused.set(); print("   ▶️  Script in esecuzione...")
                 elif command == "stats": show_stats("STATISTICHE ATTUALI")
                 elif command == "add":
@@ -555,13 +579,12 @@ def command_input_thread_func():
                         else: print("   ⚠️  Comando non valido. Usa 'set rpm <numero>' o 'set model <nome_modello>'.")
                     else: print("   ⚠️  Comando non valido. Usa 'set rpm <numero>' o 'set model <nome_modello>'.")
                 
-                # Informazioni e Debug
+                # Informazioni e Debug - show key rimosso
                 elif command == "show":
                     sub_command = command_parts[1].lower() if len(command_parts) > 1 else ""
-                    if sub_command == "key": show_current_api_key()
-                    elif sub_command == "rpm": show_rpm_stats()
+                    if sub_command == "rpm": show_rpm_stats()
                     elif sub_command == "file_progress": show_file_progress()
-                    else: print("   ⚠️  Comando non valido. Usa 'show key', 'show rpm' o 'show file_progress'.")
+                    else: print("   ⚠️  Comando non valido. Usa 'show rpm' o 'show file_progress'.")
                 elif command == "reload" and len(command_parts) > 1 and command_parts[1].lower() == 'cache': reload_persistent_cache()
                 elif command == "clear" and len(command_parts) > 1 and command_parts[1].lower() == 'cache': clear_translation_cache_func()
 
@@ -576,7 +599,7 @@ def command_input_thread_func():
                     print("\n--- Comandi Disponibili ---")
                     print("  Controllo Esecuzione:")
                     print("    stop                - Termina lo script in modo sicuro dopo il file attuale, salvando tutto.")
-                    print("    pause               - Mette in pausa l'elaborazione.")
+                    print("    pause               - Mette in pausa l'elaborazione (stampa stats/info automaticamente).")
                     print("    resume              - Riprende l'elaborazione.")
                     print("  Salto e Rotazione:")
                     print("    skip file           - Salta il file corrente e passa al successivo.")
@@ -584,8 +607,7 @@ def command_input_thread_func():
                     print("    exhausted           - Mette in blacklist l'API key corrente (es. quota finita) e ruota.")
                     print("  Gestione API Avanzata:")
                     print("    add api <chiave>    - Aggiunge una nuova chiave API durante l'esecuzione.")
-                    print("    list keys           - Elenca tutte le API key, il loro stato e l'utilizzo.")
-                    print("    show key            - Visualizza la chiave API corrente (oscurata).")
+                    print("    list keys           - Elenca tutte le API key, il loro stato e l'utilizzo (inclusa la chiave attiva).")
                     print("    remove key <indice> - Rimuove una chiave API per indice.")
                     print("    blacklist <indice>  - Mette in blacklist una chiave per indice, forzando la rotazione se attiva.")
                     print("    clear blacklist     - Rende nuovamente utilizzabili tutte le chiavi in blacklist.")
@@ -611,10 +633,10 @@ def command_input_thread_func():
 def check_and_wait_if_paused(file_context=""):
     global script_is_paused
     if script_args.interactive and not script_is_paused.is_set():
-        sys.stdout.write("\r" + " " * 40 + "\r")
-        print(f"\n\n▌▌ SCRIPT IN PAUSA (Lavorando su: {file_context}). Digita 'resume' per continuare...\n")
+        # Pulizia della riga dell'animazione/progresso prima di entrare in pausa
+        sys.stdout.write("\r" + " " * 80 + "\r")
         script_is_paused.wait()
-        print(f"▶️  SCRIPT RIPRESO (Lavorando su: {file_context}).\n")
+        print(f"\n▶️  SCRIPT RIPRESO (Lavorando su: {file_context}).\n")
 
 def wait_for_rpm_limit():
     global rpm_limit, rpm_request_timestamps
@@ -749,8 +771,11 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
         write_to_log(f"BLACKLIST HIT: Saltata traduzione per '{text_to_translate}' nel contesto: {context_for_log}")
         return text_to_translate
     if not determine_if_translatable(text_to_translate): return text_to_translate
-    cache_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context, args.model_name) # Aggiunto model_name alla cache key
+    
+    # FIX: Ripristina la chiave della cache per non includere args.model_name
+    cache_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
     cache_key = json.dumps(cache_key_tuple, ensure_ascii=False)
+    
     if cache_key in translation_cache:
         print(f"    ✅ Cache: Trovata traduzione per '{text_to_translate[:50].strip()}...'.")
         write_to_log(f"CACHE HIT: Usata traduzione in cache per il contesto: {context_for_log}")
@@ -853,9 +878,9 @@ def traduci_testo_po(input_file, output_file, args):
     except Exception as e: log_critical_error_and_exit(f"Impossibile leggere o parsare il file PO '{input_file}': {e}")
     
     texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid))
-    current_file_total_entries = texts_to_translate_count # Imposta il totale per il tracking interattivo
+    current_file_total_entries = texts_to_translate_count
     
-    processed_count_local = 0 # Contatore locale per la stampa
+    processed_count_local = 0
 
     try:
         if args.enable_file_context:
@@ -886,7 +911,7 @@ def traduci_testo_po(input_file, output_file, args):
             
             if entry.msgid and determine_if_translatable(entry.msgid):
                 processed_count_local += 1
-                current_file_processed_entries = processed_count_local # Aggiorna il contatore globale
+                current_file_processed_entries = processed_count_local
                 total_entries_translated += 1
                 print(f"\n  Traduzione {current_file_processed_entries}/{current_file_total_entries} (Riga {entry.linenum}):")
                 
@@ -953,7 +978,7 @@ def traduci_testo_json(input_file, output_file, args):
                 current_path = f"{path}.{key}" if path else key
                 if ((current_path in keys_to_translate) if args.match_full_json_path else (key in keys_to_translate)) and determine_if_translatable(value):
                     processed_count_local += 1
-                    current_file_processed_entries = processed_count_local # Aggiorna contatore globale
+                    current_file_processed_entries = processed_count_local
                     total_entries_translated += 1
                     
                     print(f"\n  Traduzione {current_file_processed_entries}/{current_file_total_entries} (Chiave: {current_path}):")
@@ -977,7 +1002,7 @@ def traduci_testo_json(input_file, output_file, args):
                 current_file_context = file_context
         
         _count(data)
-        current_file_total_entries = texts_to_translate_count # Imposta il totale per il tracking interattivo
+        current_file_total_entries = texts_to_translate_count
         print(f"ℹ️  Trovate {current_file_total_entries} voci da tradurre.")
         _translate(data)
 
@@ -1038,7 +1063,7 @@ def traduci_testo_csv(input_file, output_file, args):
                 current_file_context = file_context
         
         texts_to_translate_count = sum(1 for i, row in enumerate(data_rows) if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col]))
-        current_file_total_entries = texts_to_translate_count # Imposta il totale per il tracking interattivo
+        current_file_total_entries = texts_to_translate_count
         print(f"ℹ️  Trovate {current_file_total_entries} righe da tradurre.")
         
         output_data_rows = output_rows[1:] if header else output_rows
@@ -1051,9 +1076,8 @@ def traduci_testo_csv(input_file, output_file, args):
             is_already_translated = args.resume and len(row) > args.output_col and row[args.output_col].strip() and (args.output_col != args.translate_col or row[args.output_col] != data_rows[i][args.translate_col])
             
             if is_already_translated:
-                # Controlla se la riga era da tradurre (se aveva testo nella colonna sorgente) per l'output only
                 if len(data_rows[i]) > args.translate_col and determine_if_translatable(data_rows[i][args.translate_col]):
-                    texts_to_translate_count -= 1 # Riduzione del conteggio totale per non contare quelle "saltate" come da tradurre se in resume mode
+                    texts_to_translate_count -= 1
                     processed_count_local += 1
                     current_file_processed_entries = processed_count_local
                 print(f"  - Riga {display_row_num} già tradotta (Resume Mode). Saltata.")
@@ -1062,7 +1086,7 @@ def traduci_testo_csv(input_file, output_file, args):
             
             if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col]):
                 processed_count_local += 1
-                current_file_processed_entries = processed_count_local # Aggiorna contatore globale
+                current_file_processed_entries = processed_count_local
                 total_entries_translated += 1
                 original_text = row[args.translate_col]
                 
@@ -1091,7 +1115,6 @@ def traduci_testo_csv(input_file, output_file, args):
         try:
             with open(output_file, 'w', encoding=args.encoding, newline='') as outfile:
                 if args.translation_only_output:
-                    # In modalità resume, devo prendere tutti i testi, non solo quelli tradotti ora
                     final_texts = translated_texts_for_only_output
                     outfile.write("\n".join(final_texts) + "\n")
                 else:
@@ -1168,6 +1191,7 @@ if __name__ == "__main__":
     main_stop_event = Event()
     loader_thread = None
     if not args_parsed_main.oneThread:
+        # Se oneThread è disabilitato (default), avvia il thread per l'animazione/progresso
         loader_thread = Thread(target=animazione_caricamento, args=(main_stop_event,))
         loader_thread.start()
     try:
@@ -1178,8 +1202,6 @@ if __name__ == "__main__":
         main_stop_event.set()
         if loader_thread and loader_thread.is_alive(): loader_thread.join()
         if cmd_thread and cmd_thread.is_alive():
-            # Invia una riga vuota per sbloccare l'input se bloccato su input()
-            # Questo è un workaround tipico di threading/input su terminali, ma non sempre necessario in tutti gli ambienti.
             print("\nPer terminare, digita 'exit' o 'quit' nella console interattiva.")
         save_persistent_cache()
         show_stats(title="STATISTICHE FINALI DI ESECUZIONE")
