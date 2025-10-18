@@ -113,16 +113,37 @@ Una primordiale versione dello script, è stata realizzata per la patch in itali
 | **`--rotate-on-limit-or-error`** | Passa alla API key successiva in caso di errore persistente o limite RPM raggiunto. | `False` |
 | **`--persistent-cache`** | Attiva la cache persistente su file (`alumen_cache.json`). | `False` |
 
+---
+
 ### Modalità Interattiva
 
-Se avviato con `--interactive`, lo script rimane in ascolto sulla console per i seguenti comandi:
+Se lo script viene avviato con l'argomento `--interactive`, è possibile interagire con la console durante l'esecuzione per gestire API, cache e flusso di lavoro.
 
-| Comando | Funzione |
+| Comando | Descrizione |
 | :--- | :--- |
-| **`pause`** | Mette in pausa l'esecuzione dello script. |
-| **`resume`** | Riprende l'esecuzione dopo una pausa. |
-| **`skip api`** | Abbandona l'API key corrente e passa immediatamente alla successiva (se disponibile). |
-| **`skip file`** | Interrompe l'elaborazione del file corrente e passa al successivo (i progressi parziali vengono salvati). |
+| **`help`** | Mostra l'elenco di tutti i comandi disponibili. |
+| **`pause`** | Mette in pausa l'elaborazione del file corrente e **mostra le statistiche complete (generali, RPM e contesto) al momento della pausa.** |
+| **`resume`** | Riprende l'elaborazione del file. |
+| **`stop`** / **`exit`** / **`quit`** | Richiede un'uscita pulita. Lo script completerà la traduzione del file corrente prima di terminare. |
+| **`skip api`** | Salta l'API key attualmente in uso e tenta una rotazione forzata. |
+| **`skip file`** | Salta il file in corso di elaborazione e passa al successivo. |
+| **`log <messaggio>`** | Scrive un messaggio nel file di log (`log.txt`), se abilitato. |
+| **`stats`** | Mostra le statistiche di esecuzione aggiornate (tempo trascorso, file tradotti, hit cache, chiamate API). |
+| **`progress`** | Mostra l'avanzamento della traduzione all'interno del file corrente. |
+| **`context`** | Visualizza il contesto generale generato per il file in elaborazione (se `--enable-file-context` è attivo). |
+| **`rotate`** | Forza la rotazione della chiave API attiva alla successiva disponibile. |
+| **`set model <nome>`** | Aggiorna il modello Gemini da utilizzare (es. `gemini-1.5-pro`). |
+| **`add api <chiave>`** | Aggiunge una nuova chiave API Gemini all'elenco di quelle disponibili. |
+| **`remove api <indice>`** | Rimuove una chiave API specificando il suo indice (mostrato con `list api`). |
+| **`blacklist <indice>`** | Aggiunge una chiave API all'indice specificato alla lista nera. Se è la chiave attiva, ne forza la rotazione. |
+| **`clear blacklist`** | Rimuove tutte le chiavi dalla lista nera, rendendole nuovamente disponibili. |
+| **`set rpm <limite>`** | Imposta il limite di Richieste al Minuto (RPM). Imposta a `0` per disabilitarlo. |
+| **`rpm stats`** | Mostra le statistiche RPM correnti (limite, chiamate negli ultimi 60s, attesa stimata). |
+| **`reload cache`** | Ricarica la cache persistente da disco (`alumen_cache.json`). |
+| **`clear cache`** | Svuota la cache di traduzione in memoria. |
+| **`save cache`** | Salva immediatamente la cache in memoria su disco (se `--persistent-cache` è attivo). |
+
+---
 
 ### Esempi di Utilizzo
 
