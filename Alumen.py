@@ -20,7 +20,7 @@ import polib
 # ----- Costanti Globali -----
 MAX_RETRIES_PER_API_CALL = 3
 MAX_MAJOR_FAILURES_THRESHOLD = 6
-DEFAULT_MODEL_NAME = "gemini-1.5-flash"
+DEFAULT_MODEL_NAME = "gemini-2.5-flash"
 LOG_FILE_NAME = "log.txt"
 CACHE_FILE_NAME = "alumen_cache.json"
 DEFAULT_API_ERROR_RETRY_SECONDS = 10
@@ -56,6 +56,7 @@ graceful_exit_requested = Event()
 current_file_context = None
 current_file_total_entries = 0
 current_file_processed_entries = 0
+last_translation_prompt = None
 
 ALUMEN_ASCII_ART = """
 
@@ -390,6 +391,29 @@ def clear_translation_cache_func():
     if script_args.persistent_cache:
         print("   ℹ️  Per svuotare anche la cache su disco, usa il comando 'save cache'.")
 
+def display_colored_prompt():
+    global last_translation_prompt
+    if not last_translation_prompt:
+        print("   ℹ️  Nessun prompt di traduzione è stato ancora inviato.")
+        return
+
+    # ANSI Escape Codes per il colore Giallo
+    COLOR_VAR = "\033[93m"  # Giallo
+    COLOR_RESET = "\033[0m" # Reset
+
+    # Funzione per aggiungere il colore attorno a ogni match
+    def color_match(match):
+        # match.group(0) è l'intera corrispondenza, ad esempio "{text_to_translate}"
+        return f"{COLOR_VAR}{match.group(0)}{COLOR_RESET}"
+
+    # Cerca e colora tutti i segnaposto racchiusi tra parentesi graffe: {placeholder}
+    # re.sub richiede che il modulo 're' sia importato, ed è già presente nel tuo file.
+    colored_prompt = re.sub(r'\{[^{}]*\}', color_match, last_translation_prompt)
+
+    print("\n--- Ultimo Prompt di Traduzione Inviato ---")
+    print(colored_prompt)
+    print("-------------------------------------------\n")
+
 # --- FINE FUNZIONI DI GESTIONE ---
 
 def rotate_api_key(triggered_by_user=False, reason_override=None):
@@ -490,7 +514,7 @@ def show_stats(title="STATISTICHE DI ESECUZIONE"):
     print("-" * 50)
 
 def command_input_thread_func():
-    global user_command_skip_api, user_command_skip_file, script_is_paused, graceful_exit_requested, current_file_context
+    global user_command_skip_api, user_command_skip_file, script_is_paused, graceful_exit_requested, current_file_context, last_translation_prompt
     print("\n\n============================================")
     print("    Alumen - Console Interattiva")
     print("============================================")
@@ -587,44 +611,48 @@ def command_input_thread_func():
                     else: print("   ⚠️  Comando non valido. Usa 'show rpm' o 'show file_progress'.")
                 elif command == "reload" and len(command_parts) > 1 and command_parts[1].lower() == 'cache': reload_persistent_cache()
                 elif command == "clear" and len(command_parts) > 1 and command_parts[1].lower() == 'cache': clear_translation_cache_func()
-
+                
+                # NUOVO COMANDO INTERATTIVO: Visualizza l'ultimo prompt
+                elif command == "prompt": display_colored_prompt()
+                
                 # Fine Nuovi Comandi
-
                 elif command == "save" or (command == "salva" and len(command_parts) > 1 and command_parts[1].lower() == "cache"):
                     if script_args.persistent_cache:
-                        print("   ➡️  Comando ricevuto: salvataggio della cache in corso...")
+                        print(" ➡️ Comando ricevuto: salvataggio della cache in corso...")
                         save_persistent_cache()
-                    else: print(f"   ⚠️  Attenzione: La cache persistente è disabilitata. Usa --persistent-cache.")
+                    else:
+                        print(f" ⚠️ Attenzione: La cache persistente è disabilitata. Usa --persistent-cache.")
                 elif command == "help":
                     print("\n--- Comandi Disponibili ---")
-                    print("  Controllo Esecuzione:")
-                    print("    stop                - Termina lo script in modo sicuro dopo il file attuale, salvando tutto.")
-                    print("    pause               - Mette in pausa l'elaborazione (stampa stats/info automaticamente).")
-                    print("    resume              - Riprende l'elaborazione.")
-                    print("  Salto e Rotazione:")
-                    print("    skip file           - Salta il file corrente e passa al successivo.")
-                    print("    skip api            - Salta l'API key corrente e passa alla successiva.")
-                    print("    exhausted           - Mette in blacklist l'API key corrente (es. quota finita) e ruota.")
-                    print("  Gestione API Avanzata:")
-                    print("    add api <chiave>    - Aggiunge una nuova chiave API durante l'esecuzione.")
-                    print("    list keys           - Elenca tutte le API key, il loro stato e l'utilizzo (inclusa la chiave attiva).")
-                    print("    remove key <indice> - Rimuove una chiave API per indice.")
-                    print("    blacklist <indice>  - Mette in blacklist una chiave per indice, forzando la rotazione se attiva.")
-                    print("    clear blacklist     - Rende nuovamente utilizzabili tutte le chiavi in blacklist.")
-                    print("  Performance:")
-                    print("    set rpm <numero>    - Imposta il limite di Richieste Per Minuto (RPM) al volo (0 per disabilitare).")
-                    print("    show rpm            - Mostra il limite e l'utilizzo RPM attuale.")
-                    print("    set model <nome>    - Cambia il modello Gemini per le traduzioni future (es. 'gemini-1.5-flash').")
-                    print("  Informazioni e Utilità:")
-                    print("    stats               - Mostra le statistiche di esecuzione (tempo, file, chiamate API).")
-                    print("    context             - Visualizza il contesto generato per il file corrente.")
-                    print("    show file_progress  - Mostra lo stato di avanzamento della traduzione all'interno del file corrente.")
-                    print("    log <messaggio>     - Scrive un messaggio personalizzato nel file di log.")
-                    print("    save cache          - Salva immediatamente la cache su file.")
-                    print("    reload cache        - Ricarica la cache dal file (se è stata modificata esternamente).")
-                    print("    clear cache         - Svuota la cache di traduzione in memoria.")
-                    print("  Uscita:")
-                    print("    exit / quit         - Chiude solo questa console interattiva.\n")
+                    print(" Controllo Esecuzione:")
+                    print(" stop - Termina lo script in modo sicuro dopo il file attuale, salvando tutto.")
+                    print(" pause - Mette in pausa l'elaborazione (stampa stats/info automaticamente).")
+                    print(" resume - Riprende l'elaborazione.")
+                    print(" Salto e Rotazione:")
+                    print(" skip file - Salta il file corrente e passa al successivo.")
+                    print(" skip api - Salta l'API key corrente e passa alla successiva.")
+                    print(" exhausted - Mette in blacklist l'API key corrente (es. quota finita) e ruota.")
+                    print(" Gestione API Avanzata:")
+                    print(" add api <chiave> - Aggiunge una nuova chiave API durante l'esecuzione.")
+                    print(" list keys - Elenca tutte le API key, il loro stato e l'utilizzo (inclusa la chiave attiva).")
+                    print(" remove key <indice> - Rimuove una chiave API per indice.")
+                    print(" blacklist <indice> - Mette in blacklist una chiave per indice, forzando la rotazione se attiva.")
+                    print(" clear blacklist - Rende nuovamente utilizzabili tutte le chiavi in blacklist.")
+                    print(" Performance:")
+                    print(" set rpm <numero> - Imposta il limite di Richieste Per Minuto (RPM) al volo (0 per disabilitare).")
+                    print(" show rpm - Mostra il limite e l'utilizzo RPM attuale.")
+                    print(" set model <nome> - Cambia il modello Gemini per le traduzioni future (es. 'gemini-1.5-flash').")
+                    print(" Informazioni e Utilità:")
+                    print(" stats - Mostra le statistiche di esecuzione (tempo, file, chiamate API).")
+                    print(" context - Visualizza il contesto generato per il file corrente.")
+                    print(" show file_progress - Mostra lo stato di avanzamento della traduzione all'interno del file corrente.")
+                    print(" log <messaggio> - Scrive un messaggio personalizzato nel file di log.")
+                    print(" prompt - Visualizza l'intero prompt usato per l'ultima traduzione, evidenziando le variabili.") # NUOVO COMANDO
+                    print(" save cache - Salva immediatamente la cache su file.")
+                    print(" reload cache - Ricarica la cache dal file (se è stata modificata esternamente).")
+                    print(" clear cache - Svuota la cache di traduzione in memoria.")
+                    print(" Uscita:")
+                    print(" exit / quit - Chiude solo questa console interattiva.\n")
                 elif command in ["exit", "quit"]: print("\nINFO: Chiusura console interattiva."); break
                 elif command: print(f"   ❓ Comando '{command}' non riconosciuto. Digita 'help' per la lista dei comandi.")
         except (EOFError, KeyboardInterrupt): print("\nINFO: Chiusura console interattiva."); break
@@ -765,7 +793,7 @@ def generate_file_context(sample_text, file_name, args):
     return None
 
 def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_context=None):
-    global major_failure_count, user_command_skip_api, model, translation_cache, cache_hit_count, api_call_counts, BLACKLIST_TERMS
+    global major_failure_count, user_command_skip_api, model, translation_cache, cache_hit_count, api_call_counts, BLACKLIST_TERMS, last_translation_prompt
     if text_to_translate.strip() in BLACKLIST_TERMS:
         print(f"    - 🛑 BLACKLIST HIT: Il testo '{text_to_translate}' è in blacklist. Salto traduzione.")
         write_to_log(f"BLACKLIST HIT: Saltata traduzione per '{text_to_translate}' nel contesto: {context_for_log}")
@@ -799,13 +827,14 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
                     prompt_text = args.custom_prompt.format(text_to_translate=text_to_translate)
                 else:
                     blacklist_str = ", ".join(BLACKLIST_TERMS)
-                    prompt_base = f"Traduci il seguente testo da {args.source_lang} a {args.target_lang}, tenendo conto del contesto del gioco '{args.game_name}' e utilizzando uno stile che includa eventuali slang o espressioni colloquiali appropriate al contesto. ISTRUZIONE CRITICA: preserva esattamente tutti gli a capo originali (come `\\n` o `\\r\\n`) presenti nel testo. Inoltre, preserva eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player). Assicurati di mantenere identici i seguenti termini che NON devono essere tradotti, anche se appaiono in frasi più lunghe: {blacklist_str}. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."
+                    prompt_base = f"Traduci il seguente testo da {args.source_lang} a {args.target_lang}, tenendo conto del contesto del gioco '{args.game_name}' e utilizzando uno stile che includa eventuali slang o espressioni colloquiali appropriate al contesto e quindi adattando il testo se serve. ISTRUZIONE CRITICA: preserva esattamente tutti gli a capo originali (come `\\n` o `\\r\\n`) presenti nel testo. Inoltre, preserva eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player). Assicurati di mantenere identici i seguenti termini che NON devono essere tradotti, anche se appaiono in frasi più lunghe: {blacklist_str}. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."
                     if args.prompt_context: prompt_base += f"\nIstruzione aggiuntiva: {args.prompt_context}."
                     if dynamic_context: prompt_base += f"\nContesto aggiuntivo per questa traduzione: '{dynamic_context}'."
                     prompt_base += "\nRispondi solo con la traduzione diretta."
                     prompt_text = f"{prompt_base}\nTesto originale:\n{text_to_translate}\n\nTraduzione in {args.target_lang}:"
                 time.sleep(BASE_API_CALL_INTERVAL_SECONDS)
                 # Usa model, che è la variabile globale aggiornabile
+                last_translation_prompt = prompt_text
                 response_obj = model.generate_content(prompt_text)
                 if not response_obj or not hasattr(response_obj, 'text'): raise ValueError("Risposta dall'API non valida o vuota.")
                 translated_text = response_obj.text.strip()
@@ -877,13 +906,33 @@ def traduci_testo_po(input_file, output_file, args):
     try: po_file = polib.pofile(input_file, encoding=args.encoding)
     except Exception as e: log_critical_error_and_exit(f"Impossibile leggere o parsare il file PO '{input_file}': {e}")
     
+    # MODIFICA INIZIO: Scansiona il file per verificare se tutte le traduzioni sono già in cache
+    all_texts_in_file = []
+    for entry in po_file:
+        if determine_if_translatable(entry.msgid):
+            all_texts_in_file.append(entry.msgid)
+        if should_translate_msgctxt(entry.msgctxt):
+            all_texts_in_file.append(entry.msgctxt)
+
+    all_translations_cached = False
+    if all_texts_in_file:
+        all_translations_cached = True
+        for text in all_texts_in_file:
+            cache_key_tuple = (text, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
+            cache_key = json.dumps(cache_key_tuple, ensure_ascii=False)
+            if cache_key not in translation_cache:
+                all_translations_cached = False
+                break
+    # MODIFICA FINE
+
     texts_to_translate_count = sum(1 for entry in po_file if determine_if_translatable(entry.msgid))
     current_file_total_entries = texts_to_translate_count
     
     processed_count_local = 0
 
     try:
-        if args.enable_file_context:
+        # MODIFICA: Aggiunto 'and not all_translations_cached' per saltare la generazione del contesto
+        if args.enable_file_context and not all_translations_cached:
             sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
             sample_texts = [entry.msgid for entry in po_file if determine_if_translatable(entry.msgid)][:sample_limit]
             if sample_texts:
@@ -891,6 +940,9 @@ def traduci_testo_po(input_file, output_file, args):
                 file_context = generate_file_context("\n".join(sample_texts), file_basename, args)
                 current_file_context = file_context
         
+        if all_translations_cached and args.enable_file_context:
+             print(f"  ✅ Tutte le {len(all_texts_in_file)} traduzioni necessarie per '{file_basename}' sono già in cache. Salto la generazione del contesto.")
+
         print(f"ℹ️  Trovate {current_file_total_entries} entry da tradurre.")
         for entry in po_file:
             with command_lock:
@@ -915,7 +967,7 @@ def traduci_testo_po(input_file, output_file, args):
                 total_entries_translated += 1
                 print(f"\n  Traduzione {current_file_processed_entries}/{current_file_total_entries} (Riga {entry.linenum}):")
                 
-                final_dynamic_context = " - ".join(filter(None, [f"Contesto Generale File: {file_context}" if file_context else None, f"Contesto Specifico Entry: {context_for_prompt}" if context_for_prompt else None]))
+                final_dynamic_context = " - ".join(filter(None, [f"Contesto Generale File: {current_file_context}" if current_file_context else None, f"Contesto Specifico Entry: {context_for_prompt}" if context_for_prompt else None]))
                 if final_dynamic_context: print(f"    ℹ️  Utilizzo del contesto per migliorare la traduzione.")
                 
                 original_text = entry.msgid
@@ -956,6 +1008,21 @@ def traduci_testo_json(input_file, output_file, args):
     keys_to_translate = {k.strip() for k in args.json_keys.split(',')}
     translated_texts_for_only_output = []
     
+    # MODIFICA INIZIO: Scansiona il file per verificare se tutte le traduzioni sono già in cache
+    all_texts_in_file = []
+    _extract_json_sample_texts(data, keys_to_translate, all_texts_in_file, match_full=args.match_full_json_path, limit=None)
+
+    all_translations_cached = False
+    if all_texts_in_file:
+        all_translations_cached = True
+        for text in all_texts_in_file:
+            cache_key_tuple = (text, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
+            cache_key = json.dumps(cache_key_tuple, ensure_ascii=False)
+            if cache_key not in translation_cache:
+                all_translations_cached = False
+                break
+    # MODIFICA FINE
+
     texts_to_translate_count = 0
     def _count(obj, path=""):
         nonlocal texts_to_translate_count
@@ -993,7 +1060,8 @@ def traduci_testo_json(input_file, output_file, args):
             for i, item in enumerate(obj): _translate(item, f"{path}[{i}]")
     
     try:
-        if args.enable_file_context:
+        # MODIFICA: Aggiunto 'and not all_translations_cached' per saltare la generazione del contesto
+        if args.enable_file_context and not all_translations_cached:
             sample_texts = []
             _extract_json_sample_texts(data, keys_to_translate, sample_texts, match_full=args.match_full_json_path, limit=None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE)
             if sample_texts:
@@ -1001,6 +1069,9 @@ def traduci_testo_json(input_file, output_file, args):
                 file_context = generate_file_context("\n".join(sample_texts), file_basename, args)
                 current_file_context = file_context
         
+        if all_translations_cached and args.enable_file_context:
+            print(f"  ✅ Tutte le {len(all_texts_in_file)} traduzioni necessarie per '{file_basename}' sono già in cache. Salto la generazione del contesto.")
+
         _count(data)
         current_file_total_entries = texts_to_translate_count
         print(f"ℹ️  Trovate {current_file_total_entries} voci da tradurre.")
@@ -1049,12 +1120,29 @@ def traduci_testo_csv(input_file, output_file, args):
                     print(f"ℹ️  Resume mode: Caricate {len(output_rows)} righe da '{output_file}'.")
         except Exception as e: print(f"⚠️  Attenzione: Impossibile leggere il file di resume '{output_file}': {e}. Verrà sovrascritto.")
     
+    # MODIFICA INIZIO: Scansiona il file per verificare se tutte le traduzioni sono già in cache
+    all_texts_in_file = [
+        row[args.translate_col] for row in data_rows 
+        if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col])
+    ]
+    all_translations_cached = False
+    if all_texts_in_file:
+        all_translations_cached = True
+        for text in all_texts_in_file:
+            cache_key_tuple = (text, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
+            cache_key = json.dumps(cache_key_tuple, ensure_ascii=False)
+            if cache_key not in translation_cache:
+                all_translations_cached = False
+                break
+    # MODIFICA FINE
+    
     processed_count_local = 0
     texts_to_translate_count = 0
     translated_texts_for_only_output = []
     
     try:
-        if args.enable_file_context:
+        # MODIFICA: Aggiunto 'and not all_translations_cached' per saltare la generazione del contesto
+        if args.enable_file_context and not all_translations_cached:
             sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
             sample_texts = [row[args.translate_col] for row in data_rows if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col])][:sample_limit]
             if sample_texts:
@@ -1062,6 +1150,9 @@ def traduci_testo_csv(input_file, output_file, args):
                 file_context = generate_file_context("\n".join(sample_texts), file_basename, args)
                 current_file_context = file_context
         
+        if all_translations_cached and args.enable_file_context:
+             print(f"  ✅ Tutte le {len(all_texts_in_file)} traduzioni necessarie per '{file_basename}' sono già in cache. Salto la generazione del contesto.")
+
         texts_to_translate_count = sum(1 for i, row in enumerate(data_rows) if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col]))
         current_file_total_entries = texts_to_translate_count
         print(f"ℹ️  Trovate {current_file_total_entries} righe da tradurre.")
@@ -1091,10 +1182,10 @@ def traduci_testo_csv(input_file, output_file, args):
                 original_text = row[args.translate_col]
                 
                 print(f"\n  Traduzione {current_file_processed_entries}/{current_file_total_entries} (Riga {display_row_num}):")
-                if file_context: print(f"    ℹ️  Utilizzo del contesto per migliorare la traduzione.")
+                if current_file_context: print(f"    ℹ️  Utilizzo del contesto per migliorare la traduzione.")
                 print(f"    - Originale: '{original_text[:80]}...'")
                 
-                translated_text = get_translation_from_api(original_text, f"CSV '{file_basename}', Riga: {display_row_num}", args, dynamic_context=file_context)
+                translated_text = get_translation_from_api(original_text, f"CSV '{file_basename}', Riga: {display_row_num}", args, dynamic_context=current_file_context)
                 
                 while len(row) <= args.output_col: row.append('')
                 row[args.output_col] = translated_text

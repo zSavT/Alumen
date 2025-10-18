@@ -20,20 +20,14 @@ def determine_if_translatable(text_value):
     """Determina se una stringa è testo traducibile (non un ID, numero, ecc.)."""
     if not isinstance(text_value, str): return False
     text_value_stripped = text_value.strip()
-    
-    # 1. Controllo base: vuoto, solo numeri, o solo simboli/underscore
     if not text_value_stripped or text_value_stripped.isdigit() or re.match(r'^[\W_]+$', text_value_stripped) or "\\u" in text_value_stripped:
         return False
-
-    # 2. Controllo per flessibilità (per distinguere ID da frasi):
-    # Salta se contiene underscore ('_') ma non contiene spazi. 
     if '_' in text_value_stripped and ' ' not in text_value_stripped:
         return False
-        
     return True
 
 def get_cache_key(original_text, args):
-    """Genera la chiave di cache come farebbe Alumen.py."""
+    """Genera la chiave di cache ESATTAMENTE come fa Alumen.py."""
     cache_key_tuple = (original_text, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
     return json.dumps(cache_key_tuple, ensure_ascii=False)
 
@@ -53,24 +47,22 @@ def extract_cache_from_csv(source_path, target_path, cache_map, args):
         print(f"    ❌ Errore lettura CSV: {e}. Salto.")
         return
 
-    # Sincronizza le righe (ignorando l'header se presente in entrambi)
     if len(source_rows) != len(target_rows):
         print(f"    ⚠️  Attenzione: Numero di righe non corrispondente ({len(source_rows)} vs {len(target_rows)}). Procedo, ma potrebbero esserci errori.")
 
     start_index = 0
-    # Tentativo di rilevare e saltare l'header (assumendo che ci sia se la prima riga è diversa)
     if source_rows and target_rows and source_rows[0] != target_rows[0] and not args.no_header:
          print("    ℹ️  Saltata la prima riga (presunto header).")
          start_index = 1
 
     rows_to_process = min(len(source_rows), len(target_rows))
     entries_added = 0
+    entries_skipped = 0 # MODIFICA: Aggiunto contatore per le voci saltate
     
     for i in range(start_index, rows_to_process):
         source_row = source_rows[i]
         target_row = target_rows[i]
         
-        # Ignora righe che non hanno abbastanza colonne
         if len(source_row) <= args.source_col or len(target_row) <= args.target_col:
             continue
 
@@ -79,10 +71,15 @@ def extract_cache_from_csv(source_path, target_path, cache_map, args):
 
         if determine_if_translatable(original_text) and translated_text.strip():
             key = get_cache_key(original_text, args)
-            cache_map[key] = translated_text
-            entries_added += 1
+            # MODIFICA: Aggiunto controllo per evitare di aggiungere chiavi esistenti
+            if key not in cache_map:
+                cache_map[key] = translated_text
+                entries_added += 1
+            else:
+                entries_skipped += 1
             
-    print(f"    ✅ Aggiunte {entries_added} voci da CSV.")
+    # MODIFICA: Aggiornato il messaggio di output
+    print(f"    ✅ Aggiunte {entries_added} nuove voci. Saltate {entries_skipped} voci già presenti in cache.")
 
 def extract_cache_from_json(source_path, target_path, cache_map, args):
     """Estrae le coppie di cache dai file JSON."""
@@ -103,9 +100,10 @@ def extract_cache_from_json(source_path, target_path, cache_map, args):
 
     keys_to_translate = {k.strip() for k in args.json_keys.split(',')}
     entries_added = 0
+    entries_skipped = 0 # MODIFICA: Aggiunto contatore per le voci saltate
 
     def _traverse_and_extract(source_obj, target_obj, path=""):
-        nonlocal entries_added
+        nonlocal entries_added, entries_skipped
         if isinstance(source_obj, dict) and isinstance(target_obj, dict):
             for key, source_value in source_obj.items():
                 current_path = f"{path}.{key}" if path else key
@@ -115,10 +113,13 @@ def extract_cache_from_json(source_path, target_path, cache_map, args):
                 
                 if is_match and determine_if_translatable(source_value) and isinstance(target_value, str) and target_value.strip():
                     key_cache = get_cache_key(source_value, args)
-                    cache_map[key_cache] = target_value
-                    entries_added += 1
+                    # MODIFICA: Aggiunto controllo per evitare di aggiungere chiavi esistenti
+                    if key_cache not in cache_map:
+                        cache_map[key_cache] = target_value
+                        entries_added += 1
+                    else:
+                        entries_skipped += 1
                 
-                # Ricorsione
                 if key in target_obj:
                     _traverse_and_extract(source_value, target_value, current_path)
                     
@@ -127,7 +128,8 @@ def extract_cache_from_json(source_path, target_path, cache_map, args):
                  _traverse_and_extract(source_obj[i], target_obj[i], path)
 
     _traverse_and_extract(source_data, target_data)
-    print(f"    ✅ Aggiunte {entries_added} voci da JSON.")
+    # MODIFICA: Aggiornato il messaggio di output
+    print(f"    ✅ Aggiunte {entries_added} nuove voci. Saltate {entries_skipped} voci già presenti in cache.")
 
 
 def extract_cache_from_po(target_path, cache_map, args):
@@ -142,15 +144,21 @@ def extract_cache_from_po(target_path, cache_map, args):
         return
 
     entries_added = 0
+    entries_skipped = 0 # MODIFICA: Aggiunto contatore per le voci saltate
     for entry in po_file:
         if entry.msgid and entry.msgstr and determine_if_translatable(entry.msgid):
             original_text = entry.msgid
             translated_text = entry.msgstr
             key = get_cache_key(original_text, args)
-            cache_map[key] = translated_text
-            entries_added += 1
+            # MODIFICA: Aggiunto controllo per evitare di aggiungere chiavi esistenti
+            if key not in cache_map:
+                cache_map[key] = translated_text
+                entries_added += 1
+            else:
+                entries_skipped += 1
             
-    print(f"    ✅ Aggiunte {entries_added} voci da PO.")
+    # MODIFICA: Aggiornato il messaggio di output
+    print(f"    ✅ Aggiunte {entries_added} nuove voci. Saltate {entries_skipped} voci già presenti in cache.")
 
 # --- Processo Principale ---
 
@@ -176,7 +184,8 @@ def process_files_recursively(args, cache_map):
             print(f"\n[{file_count}] Elaborazione: {os.path.join(relative_path, filename)}")
             
             if args.file_type == 'csv':
-                if not args.source_col or not args.target_col:
+                # FIX: Rimosso controllo 'required' che falliva, ora è gestito qui
+                if args.source_col is None or args.target_col is None:
                     log_critical_error_and_exit("Per i file CSV, è obbligatorio specificare --source-col e --target-col.")
                 extract_cache_from_csv(source_path, target_path, cache_map, args)
             elif args.file_type == 'json':
@@ -184,7 +193,6 @@ def process_files_recursively(args, cache_map):
                     log_critical_error_and_exit("Per i file JSON, è obbligatorio specificare --json-keys.")
                 extract_cache_from_json(source_path, target_path, cache_map, args)
             elif args.file_type == 'po':
-                # Per i PO, il target contiene sia msgid che msgstr
                 extract_cache_from_po(target_path, cache_map, args)
 
 def main():
@@ -225,7 +233,6 @@ def main():
         
     cache_map = {}
     
-    # Carica cache esistente se richiesta l'append
     if args.append and os.path.exists(args.output_cache_file):
         try:
             with open(args.output_cache_file, 'r', encoding='utf-8') as f:
