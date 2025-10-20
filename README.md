@@ -1,11 +1,3 @@
-Certamente. Ho aggiornato il file `README.md` per includere tutte le nuove funzionalità che abbiamo aggiunto di recente, come l'integrazione con Telegram, i nuovi comandi interattivi, le dipendenze aggiornate e l'interfaccia basata su `rich`.
-
-Ho mantenuto la struttura esistente, arricchendola con sezioni dedicate e tabelle aggiornate per rendere tutto più chiaro e completo.
-
-Ecco il nuovo contenuto completo per il tuo file `README.md`.
-
------
-
 # Alumen
 
 **Alumen** è uno script Python da riga di comando progettato per automatizzare la traduzione di grandi quantità di testi contenuti in file CSV, JSON e PO. Sfrutta i modelli linguistici di Google **Gemini** per fornire traduzioni accurate e contestualizzate, con un focus su flessibilità, robustezza e controllo remoto.
