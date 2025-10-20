@@ -70,7 +70,7 @@ current_file_context = None
 current_file_total_entries = 0
 current_file_processed_entries = 0
 last_translation_prompt = None
-max_entries_limit = 201
+max_entries_limit = 156
 
 ALUMEN_ASCII_ART = """
 
@@ -725,20 +725,58 @@ def process_command(command_line: str, is_telegram: bool = False):
             else:
                 output = "⚠️ Attenzione: La cache persistente è disabilitata."
         elif command == "help":
-            lines = ["*🆘 AIUTO COMANDI ALUMEN*"]
-            lines.append("\n*Controllo Esecuzione*")
-            lines.append("`/stop` - Termina lo script dopo il file attuale.")
-            lines.append("`/pause` - Mette in pausa l'elaborazione.")
-            lines.append("`/resume` - Riprende l'elaborazione.")
-            lines.append("\n*Salto e Rotazione API*")
-            lines.append("`/skip file` - Salta il file corrente.")
-            lines.append("`/skip api` - Forza la rotazione della chiave API.")
-            lines.append("`/exhausted` - Mette in blacklist la chiave corrente e ruota.")
-            return "\n".join(lines)
-        elif command in ["exit", "quit"]:
-            output = "INFO: Chiusura console interattiva."
-        else:
-            output = f"❓ Comando '{command}' non riconosciuto. Digita 'help' per la lista."
+            help_sections = {
+                "Controllo Esecuzione": {
+                    "stop": "Termina lo script dopo il file attuale.",
+                    "pause": "Mette in pausa l'elaborazione.",
+                    "resume": "Riprende l'elaborazione."
+                },
+                "Salto e Rotazione API": {
+                    "skip file": "Salta il file corrente.",
+                    "skip api": "Forza la rotazione della chiave API.",
+                    "exhausted": "Mette in blacklist la chiave corrente e ruota."
+                },
+                "Gestione Chiavi API": {
+                    "list keys": "Mostra l'elenco delle chiavi API.",
+                    "add api <chiave>": "Aggiunge una nuova chiave API.",
+                    "remove key <indice>": "Rimuove una chiave API per indice.",
+                    "blacklist <indice>": "Aggiunge una chiave alla blacklist.",
+                    "clear blacklist": "Pulisce la blacklist delle chiavi."
+                },
+                "Statistiche e Info": {
+                    "stats": "Mostra le statistiche complete.",
+                    "show rpm": "Visualizza le statistiche RPM.",
+                    "show file_progress": "Mostra l'avanzamento del file corrente.",
+                    "context": "Mostra il contesto generato per il file.",
+                    "prompt": "Mostra l'ultimo prompt inviato a Gemini."
+                },
+                "Configurazione": {
+                    "set rpm <numero>": "Imposta il limite di richieste al minuto (0 per disabilitare).",
+                    "set model <nome>": "Cambia il modello Gemini in uso.",
+                    "set max_entries <numero>": "Imposta il limite massimo di entry per file."
+                },
+                "Cache": {
+                    "save cache": "Forza il salvataggio della cache su file.",
+                    "reload cache": "Ricarica la cache dal file persistente.",
+                    "clear cache": "Svuota la cache in memoria."
+                }
+            }
+            
+            if is_telegram:
+                lines = ["*🆘 AIUTO COMANDI ALUMEN*"]
+                for section, commands in help_sections.items():
+                    lines.append(f"\n*{section}*")
+                    for cmd, desc in commands.items():
+                        lines.append(f"`/{cmd}` - {desc}")
+                return "\n".join(lines)
+            else:
+                # Per la console locale, usiamo un formato più leggibile
+                output_lines = []
+                for section, commands in help_sections.items():
+                    output_lines.append(f"\n[bold cyan]--- {section} ---[/bold cyan]")
+                    for cmd, desc in commands.items():
+                        output_lines.append(f"[yellow]{cmd:<25}[/yellow] {desc}")
+                output = "\n".join(output_lines)
 
     if is_telegram:
         return output
@@ -1359,35 +1397,38 @@ if __name__ == "__main__":
         log_critical_error_and_exit(f"La cartella di input specificata '{args_parsed_main.input}' non esiste.")
     if args_parsed_main.file_type == 'json' and not args_parsed_main.json_keys:
         log_critical_error_and_exit("Per --file-type 'json', è obbligatorio specificare --json-keys.")
-    
+
     script_is_paused.set()
     start_time = time.time()
     if args_parsed_main.enable_file_log: setup_log_file()
-    
+
     telegram_app = None
     if args_parsed_main.telegram:
         telegram_app = telegram_bot.start_bot()
 
     initialize_api_keys_and_model()
     load_persistent_cache()
-    
+
     cmd_thread = None
     if args_parsed_main.interactive:
         cmd_thread = threading.Thread(target=command_input_thread_func, daemon=True)
         cmd_thread.start()
-    
+    interrupted = False
     try:
         process_files_recursively(args_parsed_main)
     except KeyboardInterrupt:
-        console.print("\n\n[bold red]🛑 Interruzione da tastiera (Ctrl+C) rilevata. Chiusura in corso...[/]")
+        interrupted = True
+        console.print("\n\n[bold red]🛑 Interruzione da tastiera (Ctrl+C) rilevata. Chiusura controllata in corso...[/]")
+        write_to_log("INTERRUZIONE UTENTE: Rilevato Ctrl+C. Avvio chiusura controllata.")
     finally:
-        if cmd_thread and cmd_thread.is_alive():
-            console.print("\n[yellow]Per terminare, digita 'exit' o 'quit' nella console interattiva.[/]")
-        
         if telegram_app:
+            console.print("\n[telegram] Tentativo di chiusura della connessione Telegram...[/]")
             telegram_bot.stop_bot()
-
+            console.print("[telegram] Connessione Telegram terminata.[/]")
         save_persistent_cache()
         show_stats(title="📊 STATISTICHE FINALI DI ESECUZIONE")
         write_to_log(f"--- FINE Sessione Log: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
-        console.print("\n[bold green]Lavoro completato. Script Alumen terminato.[/]")
+        if interrupted:
+            console.print("\n[bold yellow]Script Alumen terminato a causa di un'interruzione da parte dell'utente.[/]")
+        else:
+            console.print("\n[bold green]Lavoro completato. Script Alumen terminato.[/]")
