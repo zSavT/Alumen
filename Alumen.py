@@ -1,5 +1,3 @@
-# Contenuto completo del file 'Alumen.py' (con fix definitivo per Telegram)
-
 import time
 import google.generativeai as genai
 import google.api_core.exceptions
@@ -9,6 +7,8 @@ import re
 import argparse
 import sys
 import threading
+import requests
+from packaging import version
 from threading import Thread, Event, Lock
 import textwrap
 from datetime import datetime
@@ -39,6 +39,8 @@ LOG_FILE_NAME = "log.txt"
 CACHE_FILE_NAME = "alumen_cache.json"
 BASE_API_CALL_INTERVAL_SECONDS = 0.2
 FILE_CONTEXT_SAMPLE_SIZE = 15
+CURRENT_SCRIPT_VERSION = "1.5.0"
+GITHUB_REPO = "zSavT/Alumen"
 
 # ----- Variabili Globali -----
 available_api_keys = []
@@ -1348,7 +1350,9 @@ def process_files_recursively(args):
     file_paths_to_process = [os.path.join(r, f) for r, _, files in os.walk(base_input_dir) for f in files if f.endswith(f'.{args.file_type}')]
     total_files_found = len(file_paths_to_process)
     console.print(f"✅ Trovati {total_files_found} file da elaborare.")
-    
+    if total_files_found == 0:
+        console.print(f"🛑 [red]Nessun file *.{args.file_type} trovato nella cartella specificata. Uscita.[/]")
+        return
     for file_index, input_path in enumerate(file_paths_to_process):
         if graceful_exit_requested.is_set():
             console.print("\n[yellow]🛑 Uscita graduale richiesta. Interruzione del processo.[/]")
@@ -1389,9 +1393,49 @@ def process_files_recursively(args):
             console.print(f"🛑 [red]{error_msg}[/]")
             write_to_log(f"ERRORE CRITICO FILE: {error_msg}. Il file verrà saltato.")
 
+def check_for_updates():
+    try:
+        version_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/version.txt"
+        console.print("ℹ️  Controllo aggiornamenti in corso...", style="dim")
+        response = requests.get(version_url, timeout=5)
+        response.raise_for_status()
+
+        latest_version_str = response.text.strip()
+        current_version = version.parse(CURRENT_SCRIPT_VERSION)
+        latest_version = version.parse(latest_version_str)
+
+        if latest_version > current_version:
+            update_message = Text.from_markup(
+                f"[bold]🚀 Nuova versione disponibile! ({latest_version_str})[/bold]\n\n"
+                f"La tua versione attuale è la [bold red]{CURRENT_SCRIPT_VERSION}[/bold red].\n"
+                "È [bold]fortemente consigliato[/bold] aggiornare lo script per ottenere le ultime funzionalità e correzioni.\n\n"
+                f"Scarica l'ultima versione da:\n[link=https://github.com/{GITHUB_REPO}]https://github.com/{GITHUB_REPO}[/link]"
+            )
+            console.print(Panel(update_message, title="[yellow]Aggiornamento Consigliato[/]", border_style="yellow", padding=(1, 2)))
+
+            # Pausa in attesa dell'azione dell'utente
+            console.input("\n[bold]Premi Invio per continuare comunque o premi CTRL+C per uscire e aggiornare.[/bold]")
+            console.print() # Aggiunge uno spazio per pulizia
+        else:
+            console.print("✅ La tua versione dello script è aggiornata.", style="dim")
+
+    except requests.exceptions.RequestException:
+        console.print("⚠️  Impossibile verificare la presenza di aggiornamenti (errore di rete).", style="yellow dim")
+    except KeyboardInterrupt:
+        # Gestisce l'uscita tramite CTRL+C in modo pulito
+        console.print("\n🛑 Esecuzione annullata dall'utente per procedere con l'aggiornamento. A presto!")
+        sys.exit()
+    except Exception:
+        # Fallisce silenziosamente per altri errori
+        console.print("⚠️  Impossibile completare la verifica degli aggiornamenti.", style="yellow dim")
+    finally:
+        console.print()
+
+
 if __name__ == "__main__":
     console.print(ALUMEN_ASCII_ART, style="bold cyan")
     console.print("Benvenuto in Alumen, traduttore automatico potenziato da Gemini.\n")
+    check_for_updates()
     args_parsed_main = get_script_args_updated()
     if not os.path.isdir(args_parsed_main.input):
         log_critical_error_and_exit(f"La cartella di input specificata '{args_parsed_main.input}' non esiste.")
