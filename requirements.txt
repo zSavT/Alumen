@@ -1,3 +1,8 @@
-google.generativeai
-argparse_color_formatter
+google-generativeai
+python-telegram-bot
+requests
+packaging
+rich
 polib
+tenacity
+argparse-color-formatter
