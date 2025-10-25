@@ -20,12 +20,14 @@
       - [A Capo Automatico (Word Wrapping)](#a-capo-automatico-word-wrapping)
       - [Utilità e Modalità Interattiva](#utilità-e-modalità-interattiva)
     - [Modalità Interattiva](#modalità-interattiva)
+    - [Utility: Estrattore di Cache (`cache_extractor.py`)](#utility-estrattore-di-cache-cache_extractorpy)
     - [Esempi di Utilizzo](#esempi-di-utilizzo)
       - [1. Traduzione PO con Contesto, Limiti e Controllo Telegram](#1-traduzione-po-con-contesto-limiti-e-controllo-telegram)
       - [2. Traduzione CSV standard con log e API multipla](#2-traduzione-csv-standard-con-log-e-api-multipla)
       - [3. Traduzione JSON con percorso completo e wrapping](#3-traduzione-json-con-percorso-completo-e-wrapping)
+      - [4. Estrazione cache](#4-estrazione-cache)
   - [Risultato e Statistiche Finali](#risultato-e-statistiche-finali)
-  - [❗ Note Importanti](#-note-importanti)
+- [❗ Note Importanti](#-note-importanti)
 
 ## Funzionalità Principali
 
@@ -34,10 +36,14 @@
   * **Gestione API Avanzata:** Supporta la fornitura di chiavi multiple e la **rotazione automatica** in caso di errori o limiti RPM.
   * **Contesto Intelligente del File:** Analizza il contenuto di ogni file per determinare un contesto generale (es. "Dialoghi di un'ambientazione fantasy") da applicare a tutte le traduzioni di quel file.
   * **Cache Persistente:** Salva le traduzioni per evitare chiamate API ripetute, accelerando le esecuzioni successive.
+  * **Utility Estrattore Cache:** Include uno script separato (`cache_extractor.py`) per generare un file di cache partendo da file sorgente e file già tradotti, permettendo di importare traduzioni esistenti.
   * **Modalità Interattiva Potenziata:** Offre un controllo granulare durante l'esecuzione tramite comandi per gestire API, cache, flusso di lavoro e configurazione.
   * **Integrazione con Telegram:** Permette di monitorare i log e inviare comandi allo script in esecuzione da qualsiasi dispositivo tramite un bot Telegram.
+  * **Controllo Aggiornamenti Automatico:** Verifica all'avvio se è disponibile una nuova versione dello script su GitHub e avvisa l'utente.
   * **Output e Statistiche Avanzate:** Utilizza la libreria `rich` per fornire un'interfaccia chiara, con barre di progresso dettagliate e statistiche finali formattate in tabelle leggibili.
   * **Blacklist di Termini:** Permette di definire un elenco di parole o frasi che non devono mai essere tradotte.
+  * **Gestione PO Avanzata:** Oltre al `msgid`, lo script è in grado di analizzare e tradurre il campo `msgctxt` (contesto) se questo contiene testo traducibile invece di un semplice identificatore.
+  * **Salto File Intelligente:** Permette di impostare un limite massimo di entry (`set max_entries`) per saltare automaticamente file troppo grandi (es. log o file di dati).
 
 # Storia\\Creazione Progetto
 
@@ -169,6 +175,16 @@ Se lo script viene avviato con `--interactive` (o `--telegram`), è possibile in
 
 -----
 
+### Utility: Estrattore di Cache (`cache_extractor.py`)
+Alumen include uno script di utilità, `cache_extractor.py`, progettato per un compito specifico: costruire un file `alumen_cache.json` partendo da una cartella di file sorgente (es. in inglese) e una cartella di file già tradotti (es. in italiano).
+
+Questo è estremamente utile se si dispone già di un set di traduzioni (magari fatte a mano o con un altro strumento) e si desidera "importarle" nella cache di Alumen. In questo modo, quando Alumen verrà eseguito su quei file, troverà le traduzioni nella cache e non sprecherà chiamate API.
+
+Lo script ha i suoi argomenti da riga di comando. L'uso base è:
+
+È necessario specificare i parametri di formato (es. `--json-keys` per JSON, `--source-col/--target-col` per CSV) e i parametri di traduzione (es. `--game-name`) affinché le chiavi di cache generate corrispondano a quelle che Alumen cercherà.
+Usa `python cache_extractor.py --help` per tutti i dettagli.
+
 ### Esempi di Utilizzo
 
 #### 1\. Traduzione PO con Contesto, Limiti e Controllo Telegram
@@ -195,6 +211,14 @@ Traduce chiavi specifiche in file JSON, richiedendo la corrispondenza del percor
 python Alumen.py --file-type json --json-keys "data.title,menu.help_text" --match-full-json-path --wrap-at 80
 ```
 
+#### 4\. Estrazione cache
+
+Permette di estrarre la cache dai file già tradotti, considerando i file originali per i controlli e i valori non presenti nella cache, verranno salvati grazie all'append.
+
+```ps1
+python cache_extractor.py --source-dir input --target-dir tradotto --file-type po --source-lang inglese --target-lang italiano --game-name "Game Name" --append
+```
+
 -----
 
 ## Risultato e Statistiche Finali
@@ -212,7 +236,7 @@ Alla fine dell'esecuzione (o con il comando `stats`), lo script stampa un riepil
 
 -----
 
-## ❗ Note Importanti
+# ❗ Note Importanti
 
   - **Quota API**: Usa `--rpm` per evitare di superare i limiti di richieste di Gemini.
   - **Contesto Completo (`--full-context-sample`)**: Utilizzare questa opzione su file molto grandi può superare il limite massimo di token del prompt, causando errori API (Generalmente 32K token per Gemini).

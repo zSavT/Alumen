@@ -27,7 +27,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
 
-# Console principale per l'output sul terminale (con colori)
+
 console = Console()
 
 
@@ -39,7 +39,7 @@ LOG_FILE_NAME = "log.txt"
 CACHE_FILE_NAME = "alumen_cache.json"
 BASE_API_CALL_INTERVAL_SECONDS = 0.2
 FILE_CONTEXT_SAMPLE_SIZE = 15
-CURRENT_SCRIPT_VERSION = "1.5.0"
+CURRENT_SCRIPT_VERSION = "1.5.1"
 GITHUB_REPO = "zSavT/Alumen"
 
 # ----- Variabili Globali -----
@@ -72,7 +72,7 @@ current_file_context = None
 current_file_total_entries = 0
 current_file_processed_entries = 0
 last_translation_prompt = None
-max_entries_limit = 156
+max_entries_limit = 11100
 
 ALUMEN_ASCII_ART = """
 
@@ -647,6 +647,7 @@ def show_stats(title="📊 STATISTICHE DI ESECUZIONE", is_telegram: bool = False
         list_api_keys()
 
 def process_command(command_line: str, is_telegram: bool = False):
+    global user_command_skip_api, user_command_skip_file
     command_parts = command_line.split(maxsplit=1)
     command = command_parts[0].lower() if command_parts else ""
     output = ""
@@ -908,9 +909,14 @@ def generate_file_context(sample_text, file_name, args):
     
     while True:
         if args.interactive: check_and_wait_if_paused(f"Generazione Contesto per File: {file_name}")
-        with command_lock:
-            global user_command_skip_file
-            if user_command_skip_file: raise KeyboardInterrupt
+        
+        global user_command_skip_file
+        if command_lock.acquire(blocking=False):
+            try:
+                if user_command_skip_file: raise KeyboardInterrupt
+            finally:
+                command_lock.release()
+        
         try:
             file_context = _call_generative_model_for_context(prompt)
             api_call_counts[current_api_key_index] += 1
@@ -962,7 +968,7 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
     if cache_key in translation_cache:
         cache_hit_count += 1
         translated_text = translation_cache[cache_key]
-        
+
         content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
         console.print(Panel(content, title=f"[bold green]💾 CACHE[/] | {context_for_log}", border_style="green", title_align="left"))
         return translated_text
@@ -982,10 +988,21 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
         
     while True:
         if args.interactive: check_and_wait_if_paused(context_for_log)
-        with command_lock:
-            if user_command_skip_api:
-                rotate_api_key(triggered_by_user=True)
-                user_command_skip_api = False
+        
+        if command_lock.acquire(blocking=False):
+            try:
+                # Controlla prima 'skip file'
+                if user_command_skip_file:
+                    console.print("    [yellow]➡️  Comando 'skip file' rilevato. Interruzione della traduzione corrente...[/]")
+                    return text_to_translate # Questo interrompe il loop while True
+
+                # Altrimenti, controlla 'skip api'
+                if user_command_skip_api:
+                    rotate_api_key(triggered_by_user=True)
+                    user_command_skip_api = False
+            finally:
+                command_lock.release()
+        
         try:
             translated_text = _call_generative_model_for_translation(prompt_text)
             api_call_counts[current_api_key_index] += 1
@@ -1093,8 +1110,11 @@ def traduci_testo_po(input_file, output_file, args):
             task = progress.add_task(f"[cyan]PO '{os.path.basename(input_file)}'[/]", total=current_file_total_entries)
             
             for entry in po_file:
-                with command_lock:
-                    if user_command_skip_file: raise KeyboardInterrupt
+                if command_lock.acquire(blocking=False):
+                    try:
+                        if user_command_skip_file: raise KeyboardInterrupt
+                    finally:
+                        command_lock.release()
                 
                 translated_this_entry = False
                 original_context = entry.msgctxt
@@ -1169,8 +1189,12 @@ def traduci_testo_json(input_file, output_file, args):
         global total_entries_translated, current_file_processed_entries
         if isinstance(obj, dict):
             for key, value in list(obj.items()):
-                with command_lock:
-                    if user_command_skip_file: raise KeyboardInterrupt
+                if command_lock.acquire(blocking=False):
+                    try:
+                        if user_command_skip_file: raise KeyboardInterrupt
+                    finally:
+                        command_lock.release()
+
                 current_path = f"{path}.{key}" if path else key
                 is_match = (current_path in keys_to_translate) if args.match_full_json_path else (key in keys_to_translate)
                 if is_match and determine_if_translatable(value):
@@ -1308,8 +1332,13 @@ def traduci_testo_csv(input_file, output_file, args):
             for i in rows_to_translate_indices:
                 row = output_data_rows[i]
                 display_row_num = i + (2 if header else 1)
-                with command_lock:
-                    if user_command_skip_file: raise KeyboardInterrupt
+                
+                if command_lock.acquire(blocking=False):
+                    try:
+                        if user_command_skip_file: raise KeyboardInterrupt
+                    finally:
+                        command_lock.release()
+                
                 original_text = row[args.translate_col]
                 progress.update(task, description=f"[cyan]CSV '{file_basename}'[/] | Riga {display_row_num}")
                 context_log = f"CSV '{file_basename}' | Riga {display_row_num}"
@@ -1357,10 +1386,17 @@ def process_files_recursively(args):
         if graceful_exit_requested.is_set():
             console.print("\n[yellow]🛑 Uscita graduale richiesta. Interruzione del processo.[/]")
             break
-        with command_lock:
-            if user_command_skip_file:
-                console.print(f"[yellow]➡️  Comando 'skip file' rilevato. Saltando: '{os.path.basename(input_path)}'.[/]")
-                continue
+        
+        skip_this_file = False
+        if command_lock.acquire(blocking=False):
+            try:
+                if user_command_skip_file:
+                    console.print(f"[yellow]➡️  Comando 'skip file' rilevato. Saltando: '{os.path.basename(input_path)}'.[/]")
+                    skip_this_file = True
+            finally:
+                command_lock.release()
+        if skip_this_file:
+            continue
         
         current_file_total_entries, current_file_processed_entries = 0, 0
         if script_args.interactive: check_and_wait_if_paused(f"Inizio file: {os.path.basename(input_path)}")
