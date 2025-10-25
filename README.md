@@ -8,20 +8,20 @@
   - [Indice](#indice)
   - [Funzionalità Principali](#funzionalità-principali)
 - [Storia\\Creazione Progetto](#storiacreazione-progetto)
-  - [Utilizzo](#utilizzo)
-    - [Prerequisiti - Installazione e Configurazione](#prerequisiti---installazione-e-configurazione)
-      - [Configurazione Telegram (Opzionale)](#configurazione-telegram-opzionale)
-    - [Argomenti da Riga di Comando](#argomenti-da-riga-di-comando)
-      - [Configurazione API e Modello](#configurazione-api-e-modello)
-      - [Configurazione File e Formato](#configurazione-file-e-formato)
-      - [Input/Output e Formato CSV](#inputoutput-e-formato-csv)
-      - [Input/Output e Formato JSON](#inputoutput-e-formato-json)
-      - [Parametri di Traduzione](#parametri-di-traduzione)
-      - [A Capo Automatico (Word Wrapping)](#a-capo-automatico-word-wrapping)
-      - [Utilità e Modalità Interattiva](#utilità-e-modalità-interattiva)
-    - [Modalità Interattiva](#modalità-interattiva)
-    - [Utility: Estrattore di Cache (`cache_extractor.py`)](#utility-estrattore-di-cache-cache_extractorpy)
-    - [Esempi di Utilizzo](#esempi-di-utilizzo)
+- [Utilizzo](#utilizzo)
+  - [Prerequisiti - Installazione e Configurazione](#prerequisiti---installazione-e-configurazione)
+    - [Configurazione Telegram (Opzionale)](#configurazione-telegram-opzionale)
+  - [Argomenti da Riga di Comando](#argomenti-da-riga-di-comando)
+    - [Configurazione API e Modello](#configurazione-api-e-modello)
+    - [Configurazione File e Formato](#configurazione-file-e-formato)
+    - [Input/Output e Formato CSV](#inputoutput-e-formato-csv)
+    - [Input/Output e Formato JSON](#inputoutput-e-formato-json)
+    - [Parametri di Traduzione](#parametri-di-traduzione)
+    - [A Capo Automatico (Word Wrapping)](#a-capo-automatico-word-wrapping)
+    - [Utilità e Modalità Interattiva](#utilità-e-modalità-interattiva)
+  - [Modalità Interattiva](#modalità-interattiva)
+  - [Utility: Estrattore di Cache (`cache_extractor.py`)](#utility-estrattore-di-cache-cache_extractorpy)
+  - [Esempi di Utilizzo](#esempi-di-utilizzo)
       - [1. Traduzione PO con Contesto, Limiti e Controllo Telegram](#1-traduzione-po-con-contesto-limiti-e-controllo-telegram)
       - [2. Traduzione CSV standard con log e API multipla](#2-traduzione-csv-standard-con-log-e-api-multipla)
       - [3. Traduzione JSON con percorso completo e wrapping](#3-traduzione-json-con-percorso-completo-e-wrapping)
@@ -49,9 +49,9 @@
 
 Una primordiale versione dello script è stata realizzata per la patch in italiano per il gioco [Valkyria Chronicles](https://github.com/zSavT/Valkyria-Chronicles-Patch-ITA.git). Successivamente, lo script è mutato per supportare la traduzione dei file del gioco [Yakuza 4](https://github.com/zSavT/Yakuza4-Patch-ITA.git), adottando il più versatile e potente Gemini. Con il tempo, lo script è stato reso generico per adattarsi a qualsiasi progetto, grazie anche alla facilità con cui Gemini ha permesso di potenziarne le funzionalità e l'adattabilità.
 
-## Utilizzo
+# Utilizzo
 
-### Prerequisiti - Installazione e Configurazione
+## Prerequisiti - Installazione e Configurazione
 
 1.  **Python:** Assicurati di avere Python 3.8 o superiore installato.
 2.  **Librerie:** Installa tutte le dipendenze necessarie con un unico comando:
@@ -62,7 +62,7 @@ Una primordiale versione dello script è stata realizzata per la patch in italia
       * Tramite l'argomento `--api` (consigliato per script).
       * Inserendole, una per riga, in un file denominato `api_key.txt` nella stessa directory dello script.
 
-#### Configurazione Telegram (Opzionale)
+### Configurazione Telegram (Opzionale)
 
 Per usare il monitoraggio e i comandi da remoto, segui questi passaggi:
 
@@ -77,16 +77,16 @@ Per usare il monitoraggio e i comandi da remoto, segui questi passaggi:
     ```
 4.  **Avvia lo script** con il flag `--telegram`.
 
-### Argomenti da Riga di Comando
+## Argomenti da Riga di Comando
 
-#### Configurazione API e Modello
+### Configurazione API e Modello
 
 | Argomento | Descrizione | Default |
 | :--- | :--- | :--- |
 | **`--api`** | Specifica una o più chiavi API Gemini, separate da virgola. | - |
 | **`--model-name`** | Nome del modello Gemini da utilizzare. | `gemini-2.5-flash` |
 
-#### Configurazione File e Formato
+### Configurazione File e Formato
 
 | Argomento | Descrizione | Default |
 | :--- | :--- | :--- |
@@ -94,7 +94,7 @@ Per usare il monitoraggio e i comandi da remoto, segui questi passaggi:
 | **`--file-type`** | Tipo di file da elaborare (`csv`, `json` o `po`). | `csv` |
 | **`--encoding`** | Codifica caratteri dei file. | `utf-8` |
 
-#### Input/Output e Formato CSV
+### Input/Output e Formato CSV
 
 | Argomento | Descrizione | Default |
 | :--- | :--- | :--- |
@@ -103,14 +103,14 @@ Per usare il monitoraggio e i comandi da remoto, segui questi passaggi:
 | **`--output-col`** | [Solo CSV] Indice (0-based) della colonna per il testo tradotto. | `3` |
 | **`--max-cols`** | [Solo CSV] Numero massimo di colonne attese per riga (controlli). | Nessun controllo |
 
-#### Input/Output e Formato JSON
+### Input/Output e Formato JSON
 
 | Argomento | Descrizione | Default |
 | :--- | :--- | :--- |
 | **`--json-keys`** | **[Solo JSON, Obbligatorio]** Elenco di chiavi (separate da virgola) da tradurre. Supporta notazione a punto (es. `key1,path.to.key2`). | - |
 | **`--match-full-json-path`** | [Solo JSON] Richiede la corrispondenza del percorso completo della chiave (es. `parent.child.key`). | `False` |
 
-#### Parametri di Traduzione
+### Parametri di Traduzione
 
 | Argomento | Descrizione | Default |
 | :--- | :--- | :--- |
@@ -124,14 +124,14 @@ Per usare il monitoraggio e i comandi da remoto, segui questi passaggi:
 | **`--enable-file-context`** | **Abilita il Contesto Intelligente del File.** Analizza le prime 15 frasi del file per generare un contesto. | `False` |
 | **`--full-context-sample`** | **[Necessita `--enable-file-context`]** Utilizza **tutte** le frasi valide nel file per generare il contesto. | `False` |
 
-#### A Capo Automatico (Word Wrapping)
+### A Capo Automatico (Word Wrapping)
 
 | Argomento | Descrizione | Default |
 | :--- | :--- | :--- |
 | **`--wrap-at`** | Lunghezza massima della riga per a capo automatico. | - |
 | **`--newline-char`** | Carattere da usare per l'a capo automatico. | `\n` |
 
-#### Utilità e Modalità Interattiva
+### Utilità e Modalità Interattiva
 
 | Argomento | Descrizione | Default |
 | :--- | :--- | :--- |
@@ -144,7 +144,7 @@ Per usare il monitoraggio e i comandi da remoto, segui questi passaggi:
 
 -----
 
-### Modalità Interattiva
+## Modalità Interattiva
 
 Se lo script viene avviato con `--interactive` (o `--telegram`), è possibile inviare comandi per gestire l'esecuzione.
 
@@ -175,7 +175,7 @@ Se lo script viene avviato con `--interactive` (o `--telegram`), è possibile in
 
 -----
 
-### Utility: Estrattore di Cache (`cache_extractor.py`)
+## Utility: Estrattore di Cache (`cache_extractor.py`)
 Alumen include uno script di utilità, `cache_extractor.py`, progettato per un compito specifico: costruire un file `alumen_cache.json` partendo da una cartella di file sorgente (es. in inglese) e una cartella di file già tradotti (es. in italiano).
 
 Questo è estremamente utile se si dispone già di un set di traduzioni (magari fatte a mano o con un altro strumento) e si desidera "importarle" nella cache di Alumen. In questo modo, quando Alumen verrà eseguito su quei file, troverà le traduzioni nella cache e non sprecherà chiamate API.
@@ -185,7 +185,7 @@ Lo script ha i suoi argomenti da riga di comando. L'uso base è:
 È necessario specificare i parametri di formato (es. `--json-keys` per JSON, `--source-col/--target-col` per CSV) e i parametri di traduzione (es. `--game-name`) affinché le chiavi di cache generate corrispondano a quelle che Alumen cercherà.
 Usa `python cache_extractor.py --help` per tutti i dettagli.
 
-### Esempi di Utilizzo
+## Esempi di Utilizzo
 
 #### 1\. Traduzione PO con Contesto, Limiti e Controllo Telegram
 
