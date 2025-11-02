@@ -2,6 +2,8 @@
 
 **Alumen** è uno script Python da riga di comando progettato per automatizzare la traduzione di grandi quantità di testi contenuti in file CSV, JSON e PO. Sfrutta i modelli linguistici di Google **Gemini** per fornire traduzioni accurate e contestualizzate, con un focus su flessibilità, robustezza e controllo remoto.
 
+![](img/Alumen.png)
+
 ## Indice
 
 - [Alumen](#alumen)
