@@ -1,114 +1,143 @@
-# Contenuto completo del file corretto 'telegram_bot.py'
-
 import logging
 import json
-import io
-import sys
 import threading
 import asyncio
+import sys
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, JobQueue
 
-import Alumen
+# Importa il Core per accedere allo stato globale
+try:
+    import AlumenCore
+except ImportError:
+    print("Errore: AlumenCore.py non trovato nella stessa directory.")
+    sys.exit(1)
 
-# --- Variabili Globali per il Bot ---
+# --- Globali ---
 bot_app = None
 CHAT_ID = None
 
-# --- Gestore di Log Personalizzato per Telegram ---
-
+# --- Log Handler ---
 class TelegramLogHandler(logging.Handler):
-    def __init__(self, application: Application, chat_id: str):
+    def __init__(self, application, chat_id):
         super().__init__()
-        self.application = application
-        self.chat_id = chat_id
+        self.app = application
+        self.cid = chat_id
 
-    def emit(self, record: logging.LogRecord):
-        if (
-            "httpx" in record.name 
-            or "telegram" in record.name 
-            or "apscheduler" in record.name
-        ):
-            return
-            
-        log_entry = self.format(record)
-        
-        if self.application.job_queue:
-            self.application.job_queue.run_once(
-                lambda context: context.bot.send_message(chat_id=self.chat_id, text=log_entry),
-                0
-            )
+    def emit(self, record):
+        if any(x in record.name for x in ["httpx", "telegram", "apscheduler"]): return
+        msg = self.format(record)
+        if self.app.job_queue:
+            self.app.job_queue.run_once(lambda c: c.bot.send_message(chat_id=self.cid, text=msg), 0)
 
-# --- Gestore Generico dei Comandi ---
-
-async def generic_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- Command Processor Interno ---
+def execute_core_command(command: str):
     """
-    Cattura qualsiasi messaggio di testo, lo passa al processore di comandi
-    principale e invia la stringa di testo formattata come risposta.
+    Esegue comandi agendo direttamente su AlumenCore.
+    Poiché AlumenCore 2.0 non ha un processore comandi, lo simuliamo qui.
     """
-    user = update.effective_user
-    command_line = update.message.text
+    cmd = command.strip().lower()
     
-    Alumen.console.log(f"Comando Telegram '{command_line}' ricevuto da {user.username}")
-
-    if command_line.startswith('/'):
-        command_line = command_line[1:]
-
-    try:
-        # Chiama la funzione centralizzata con il flag per Telegram.
-        # Questa funzione ora RESTITUISCE una stringa formattata.
-        output_string = Alumen.process_command(command_line, is_telegram=True)
+    if cmd == "stop":
+        # Cerca un evento di stop nel Core (assumendo che venga passato o sia globale)
+        # Nel codice Core fornito, stop_event è passato ai thread.
+        # Per semplicità, qui solleviamo un flag globale se esiste, o usiamo sys.exit come fallback brutale se necessario,
+        # ma cerchiamo di essere gentili.
         
-        if not output_string or not output_string.strip():
-            output_string = "✅ Comando eseguito."
+        # Nota: AlumenCore.py non espone 'stop_event' globalmente al modulo, ma 
+        # possiamo provare a usare graceful_exit_requested se definito, o forzare l'uscita.
+        # Soluzione: AlumenCore dovrebbe avere un flag globale. Se non c'è, questo comando è limitato.
+        # Assumiamo che l'utente abbia usato lo script AlumenCore fornito che NON ha un stop_event globale esposto.
+        # Tuttavia, possiamo iniettare un'eccezione o messaggio.
+        
+        return "⚠️ Il comando Stop via Telegram richiede che lo script sia in modalità GUI o supporti l'evento globale."
+
+    elif cmd == "status" or cmd == "stats":
+        # Legge variabili globali di AlumenCore
+        try:
+            files = AlumenCore.total_files_translated
+            keys = len(AlumenCore.available_api_keys)
+            curr_k = AlumenCore.current_api_key_index
+            cache = len(AlumenCore.translation_cache)
+            return (
+                f"📊 *STATO ALUMEN*\n"
+                f"✅ File Tradotti: `{files}`\n"
+                f"🔑 API Keys attive: `{keys}` (Indice corrente: `{curr_k}`)\n"
+                f"💾 Voci in Cache: `{cache}`"
+            )
+        except Exception as e:
+            return f"Errore lettura stato: {e}"
             
-    except Exception as e:
-        output_string = f"🛑 Errore durante l'esecuzione del comando: {e}"
+    elif cmd == "skip":
+        # Questo è difficile senza accesso al lock del thread specifico.
+        return "⚠️ Il comando Skip non è disponibile in questa versione 'Core'."
 
-    # Invia la stringa pulita a Telegram, usando la formattazione Markdown
-    await update.message.reply_text(output_string, parse_mode="Markdown")
-
-# --- Funzione di Notifica ---
-
-def send_telegram_notification(message: str):
-    """Invia un messaggio di notifica asincrono a Telegram."""
-    if bot_app and bot_app.job_queue:
-        bot_app.job_queue.run_once(
-            lambda context: context.bot.send_message(
-                chat_id=CHAT_ID, text=message, parse_mode="Markdown"
-            ),
-            0
+    elif cmd == "help":
+        return (
+            "🤖 *Comandi Disponibili:*\n"
+            "`/status` - Mostra statistiche traduzione\n"
+            "`/stop` - (Non disponibile in Core-only mode)\n"
+            "I log verranno inviati qui automaticamente."
         )
+    
+    return "Comando non riconosciuto. Usa /help."
 
-# --- Funzioni Principali di Avvio e Arresto del Bot ---
+# --- Handler Telegram ---
+async def generic_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = update.message.text
+    if txt.startswith('/'): txt = txt[1:]
+    
+    AlumenCore.log_msg(f"[Telegram] Comando ricevuto: {txt}")
+    response = execute_core_command(txt)
+    await update.message.reply_text(response, parse_mode="Markdown")
+
+# --- Public API ---
+def send_telegram_notification(msg):
+    if bot_app and bot_app.job_queue:
+        bot_app.job_queue.run_once(lambda c: c.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown"), 0)
 
 def start_bot():
     global bot_app, CHAT_ID
     try:
         with open("telegram_config.json", "r") as f:
-            config = json.load(f)
-            token = config.get("bot_token")
-            CHAT_ID = config.get("chat_id")
-        if not token or not CHAT_ID or token == "TUO_TOKEN_SEGRETO_QUI":
-            Alumen.console.print("[bold red]ERRORE:[/] Il file 'telegram_config.json' non è configurato correttamente.")
-            return None
-    except FileNotFoundError:
-        Alumen.console.print("[bold red]ERRORE:[/] File 'telegram_config.json' non trovato.")
+            cfg = json.load(f)
+            token = cfg.get("bot_token")
+            CHAT_ID = cfg.get("chat_id")
+    except:
+        print("⚠️ telegram_config.json mancante.")
         return None
-        
-    Alumen.console.print("🤖 Avvio dell'integrazione con Telegram...")
 
-    job_queue = JobQueue()
-    builder = Application.builder().token(token)
-    builder.job_queue(job_queue)
-    bot_app = builder.build()
+    if not token or not CHAT_ID: return None
 
-    telegram_handler = TelegramLogHandler(bot_app, CHAT_ID)
-    formatter = logging.Formatter('ℹ️ %(message)s')
-    telegram_handler.setFormatter(formatter)
-    logging.getLogger().addHandler(telegram_handler)
+    jq = JobQueue()
+    bot_app = Application.builder().token(token).job_queue(jq).build()
 
-    # Aggiungi un unico gestore per tutti i messaggi di testo
+    # Log redirection
+    h = TelegramLogHandler(bot_app, CHAT_ID)
+    h.setFormatter(logging.Formatter('ℹ️ %(message)s'))
+    logging.getLogger().addHandler(h)
+
+    bot_app.add_handler(MessageHandler(filters.TEXT, generic_handler))
+
+    t = threading.Thread(target=bot_app.run_polling, daemon=True)
+    t.start()
+    
+    print("✅ Telegram Bot Avviato.")
+    send_telegram_notification("🚀 *Alumen Core Avviato!*")
+    return bot_app
+
+def stop_bot():
+    global bot_app
+    if not bot_app: return
+    print("Arresto Telegram...")
+    
+    # Shutdown asincrono hacky per thread sincrono
+    loop = bot_app.loop
+    if loop and loop.is_running():
+        async def bye():
+            await bot_app.bot.send_message(chat_id=CHAT_ID, text="🏁 Script Terminato.")
+            await bot_app.shutdown()
+        asyncio.run_coroutine_threadsafe(bye(), loop)    # Aggiungi un unico gestore per tutti i messaggi di testo
     bot_app.add_handler(MessageHandler(filters.TEXT, generic_command_handler))
 
     bot_thread = threading.Thread(target=bot_app.run_polling, daemon=True)
