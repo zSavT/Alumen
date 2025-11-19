@@ -1,88 +1,215 @@
-# Alumen
 
-**Alumen** è uno script Python da riga di comando progettato per automatizzare la traduzione di grandi quantità di testi contenuti in file CSV, JSON e PO. Sfrutta i modelli linguistici di Google **Gemini** per fornire traduzioni accurate e contestualizzate, con un focus su flessibilità, robustezza e controllo remoto.
+# Alumen - Suite di Traduzione AI Automatizzata
 
-![](img/Alumen.png)
+Alumen è un software open-source progettato per automatizzare la localizzazione di progetti software e videoludici. Utilizza i modelli linguistici di Google Gemini per tradurre massivamente file di testo mantenendo il contesto, la formattazione e le variabili di codice.
+
+Il software è diviso in due componenti principali:
+1.  **AlumenGUI.py**: Un'interfaccia grafica per configurare ed eseguire le traduzioni senza usare il terminale.
+2.  **AlumenCore.py**: Il motore di traduzione da riga di comando, ideale per automazione e server.
+
+Supporta nativamente i formati **CSV, Excel (XLSX), JSON, PO (Gettext) e SRT (Sottotitoli)**.
 
 ## Indice
 
-- [Alumen](#alumen)
-  - [Indice](#indice)
-  - [Funzionalità Principali](#funzionalità-principali)
-- [Storia\\Creazione Progetto](#storiacreazione-progetto)
-- [Utilizzo](#utilizzo)
-  - [Prerequisiti - Installazione e Configurazione](#prerequisiti---installazione-e-configurazione)
-    - [Configurazione Telegram (Opzionale)](#configurazione-telegram-opzionale)
-  - [Argomenti da Riga di Comando](#argomenti-da-riga-di-comando)
-    - [Configurazione API e Modello](#configurazione-api-e-modello)
-    - [Configurazione File e Formato](#configurazione-file-e-formato)
-    - [Input/Output e Formato CSV](#inputoutput-e-formato-csv)
-    - [Input/Output e Formato JSON](#inputoutput-e-formato-json)
-    - [Parametri di Traduzione](#parametri-di-traduzione)
-    - [A Capo Automatico (Word Wrapping)](#a-capo-automatico-word-wrapping)
-    - [Utilità e Modalità Interattiva](#utilità-e-modalità-interattiva)
-  - [Modalità Interattiva](#modalità-interattiva)
-  - [Utility: Estrattore di Cache (`cache_extractor.py`)](#utility-estrattore-di-cache-cache_extractorpy)
-  - [Esempi di Utilizzo](#esempi-di-utilizzo)
-      - [1. Traduzione PO con Contesto, Limiti e Controllo Telegram](#1-traduzione-po-con-contesto-limiti-e-controllo-telegram)
-      - [2. Traduzione CSV standard con log e API multipla](#2-traduzione-csv-standard-con-log-e-api-multipla)
-      - [3. Traduzione JSON con percorso completo e wrapping](#3-traduzione-json-con-percorso-completo-e-wrapping)
-      - [4. Estrazione cache](#4-estrazione-cache)
-  - [Risultato e Statistiche Finali](#risultato-e-statistiche-finali)
-- [❗ Note Importanti](#-note-importanti)
+1.  [Prerequisiti e Installazione](#prerequisiti-e-installazione)
+2.  [Configurazione API Google](#configurazione-api-google)
+3.  [Guida all'uso: Interfaccia Grafica (GUI)](#guida-alluso-interfaccia-grafica-gui)
+4.  [Guida all'uso: Riga di Comando (CLI)](#guida-alluso-riga-di-comando-cli)
+5.  [Funzionalità Avanzate](#funzionalità-avanzate)
+    *   [Smart Batching](#smart-batching)
+    *   [Agentic Reflection](#agentic-reflection)
+    *   [Glossario e Guide di Stile](#glossario-e-guide-di-stile)
+    *   [Dry Run (Preventivo)](#dry-run-preventivo)
+6.  [Dettagli Formati File Supportati](#dettagli-formati-file-supportati)
+7.  [Utility: Estrattore di Cache](#utility-estrattore-di-cache)
+8.  [Utility: Integrazione Telegram](#utility-integrazione-telegram)
 
-## Funzionalità Principali
+---
 
-  * **Supporto File Multiplo:** Elabora file `.csv`, `.json`, e `.po` (formato Gettext).
-  * **Traduzione Contesto-Consapevole:** Utilizza Gemini per traduzioni che mantengono il contesto del videogioco, preservando tag e placeholder.
-  * **Gestione API Avanzata:** Supporta la fornitura di chiavi multiple e la **rotazione automatica** in caso di errori o limiti RPM.
-  * **Contesto Intelligente del File:** Analizza il contenuto di ogni file per determinare un contesto generale (es. "Dialoghi di un'ambientazione fantasy") da applicare a tutte le traduzioni di quel file.
-  * **Cache Persistente:** Salva le traduzioni per evitare chiamate API ripetute, accelerando le esecuzioni successive.
-  * **Utility Estrattore Cache:** Include uno script separato (`cache_extractor.py`) per generare un file di cache partendo da file sorgente e file già tradotti, permettendo di importare traduzioni esistenti.
-  * **Modalità Interattiva Potenziata:** Offre un controllo granulare durante l'esecuzione tramite comandi per gestire API, cache, flusso di lavoro e configurazione.
-  * **Integrazione con Telegram:** Permette di monitorare i log e inviare comandi allo script in esecuzione da qualsiasi dispositivo tramite un bot Telegram.
-  * **Controllo Aggiornamenti Automatico:** Verifica all'avvio se è disponibile una nuova versione dello script su GitHub e avvisa l'utente.
-  * **Output e Statistiche Avanzate:** Utilizza la libreria `rich` per fornire un'interfaccia chiara, con barre di progresso dettagliate e statistiche finali formattate in tabelle leggibili.
-  * **Blacklist di Termini:** Permette di definire un elenco di parole o frasi che non devono mai essere tradotte.
-  * **Gestione PO Avanzata:** Oltre al `msgid`, lo script è in grado di analizzare e tradurre il campo `msgctxt` (contesto) se questo contiene testo traducibile invece di un semplice identificatore.
-  * **Salto File Intelligente:** Permette di impostare un limite massimo di entry (`set max_entries`) per saltare automaticamente file troppo grandi (es. log o file di dati).
+## Prerequisiti e Installazione
 
-# Storia\\Creazione Progetto
+Alumen richiede che **Python 3.10** o versioni successive sia installato sul sistema.
 
-Una primordiale versione dello script è stata realizzata per la patch in italiano per il gioco [Valkyria Chronicles](https://github.com/zSavT/Valkyria-Chronicles-Patch-ITA.git). Successivamente, lo script è mutato per supportare la traduzione dei file del gioco [Yakuza 4](https://github.com/zSavT/Yakuza4-Patch-ITA.git), adottando il più versatile e potente Gemini. Con il tempo, lo script è stato reso generico per adattarsi a qualsiasi progetto, grazie anche alla facilità con cui Gemini ha permesso di potenziarne le funzionalità e l'adattabilità.
+### Installazione delle Librerie
+Per utilizzare Alumen e tutte le sue funzionalità (incluso il supporto Excel e Telegram), è necessario installare le dipendenze tramite il terminale:
 
-# Utilizzo
+```bash
+pip install google-generativeai polib openpyxl rich tenacity packaging "python-telegram-bot[job-queue]"
+```
 
-## Prerequisiti - Installazione e Configurazione
+---
 
-1.  **Python:** Assicurati di avere Python 3.8 o superiore installato.
-2.  **Librerie:** Installa tutte le dipendenze necessarie con un unico comando:
-    ```bash
-    pip install google-generativeai polib argparse-color-formatter rich tenacity "python-telegram-bot[job-queue]"
-    ```
-3.  **Chiavi API Gemini:** Ottieni una o più chiavi API da Google AI Studio. Puoi fornirle in due modi:
-      * Tramite l'argomento `--api` (consigliato per script).
-      * Inserendole, una per riga, in un file denominato `api_key.txt` nella stessa directory dello script.
+## Configurazione API Google
 
-### Configurazione Telegram (Opzionale)
+Alumen utilizza l'API di Google Gemini. È necessario ottenere una chiave API gratuita o a pagamento.
 
-Per usare il monitoraggio e i comandi da remoto, segui questi passaggi:
+1.  Visitare Google AI Studio.
+2.  Creare una nuova API Key.
+3.  La chiave può essere fornita ad Alumen in due modi:
+    *   Incollandola direttamente nell'interfaccia o nel comando.
+    *   Creando un file chiamato `api_key.txt` nella stessa cartella dello script e incollando la chiave al suo interno. È possibile inserire più chiavi (una per riga) per permettere al software di ruotarle automaticamente in caso di esaurimento della quota.
 
-1.  **Crea un Bot:** Parla con `@BotFather` su Telegram, usa il comando `/newbot` e segui le istruzioni. Salva il **Token API** che ti viene fornito.
-2.  **Ottieni il tuo Chat ID:** Parla con `@userinfobot` su Telegram per ottenere il tuo ID numerico.
-3.  **Crea il file `telegram_config.json`**: Nella stessa cartella di `Alumen.py`, crea questo file e inserisci le tue credenziali:
+---
+
+## Guida all'uso: Interfaccia Grafica (GUI)
+
+Per gli utenti che preferiscono un ambiente visivo, avviare lo script `AlumenGUI.py`:
+
+```bash
+python AlumenGUI.py
+```
+
+Si aprirà una finestra divisa in tre schede principali:
+
+### 1. Scheda Configurazione
+Qui si impostano i parametri fondamentali:
+*   **API Keys:** Inserire le chiavi Google Gemini separate da virgola. Se presente il file `api_key.txt`, verrà caricato automaticamente.
+*   **Cartella Input:** Selezionare la cartella che contiene i file da tradurre.
+*   **Formato File:** Scegliere tra csv, json, xlsx, po, srt.
+*   **Lingue:** Definire la lingua di origine (es. "Inglese") e quella di destinazione (es. "Italiano").
+*   **Opzioni Specifiche:**
+    *   *CSV:* Delimitatore e indice colonne.
+    *   *JSON:* Chiavi da tradurre (obbligatorio per i file JSON).
+
+### 2. Scheda Avanzate
+Qui si gestiscono le opzioni per la qualità e le prestazioni:
+*   **Glossario:** Selezionare un file CSV contenente termini che devono essere tradotti in modo fisso.
+*   **Batch Size:** Numero di frasi inviate in una singola richiesta. Default: 30. Valori più alti aumentano la velocità ma consumano più token.
+*   **Cache Persistente:** Se attivo, salva le traduzioni su disco. Se si riavvia il programma, le frasi già tradotte non verranno inviate nuovamente all'API.
+
+### 3. Scheda Esecuzione
+*   **Log:** Mostra in tempo reale le operazioni svolte dal software.
+*   **Avvia Traduzione:** Lancia il processo.
+*   **Stop:** Interrompe il processo in modo sicuro.
+
+---
+
+## Guida all'uso: Riga di Comando (CLI)
+
+Per utilizzare il motore di traduzione direttamente da terminale (utile per server o script batch), avviare `AlumenCore.py`.
+
+### Sintassi Base
+```bash
+python AlumenCore.py --input "percorso/cartella" --file-type csv --api "LA_TUA_KEY"
+```
+
+### Elenco Completo degli Argomenti
+
+#### Configurazione Generale
+*   `--input`: Cartella contenente i file da tradurre. Default: `input`.
+*   `--api`: Chiavi API separate da virgola.
+*   `--model-name`: Modello Gemini da usare. Default: `gemini-2.0-flash`.
+*   `--enable-file-log`: Attiva la scrittura dei log su file `log.txt`.
+
+#### Gestione File
+*   `--file-type`: Formato dei file (`csv`, `json`, `xlsx`, `po`, `srt`).
+*   `--encoding`: Codifica del testo (es. `utf-8`, `cp1252`). Default: `utf-8`.
+
+#### Lingua e Traduzione
+*   `--source-lang`: Lingua di partenza. Default: `inglese`.
+*   `--target-lang`: Lingua di arrivo. Default: `italiano`.
+*   `--glossary`: Percorso del file CSV del glossario.
+*   `--style-guide`: Percorso di un file di testo contenente istruzioni di stile.
+
+#### Prestazioni e Batching
+*   `--batch-size`: Quante righe tradurre contemporaneamente. Default: 30.
+*   `--rpm`: Limite di Richieste Per Minuto per evitare errori di quota.
+*   `--persistent-cache`: Abilita il salvataggio/caricamento della cache da `alumen_cache.json`.
+*   `--dry-run`: Esegue una simulazione. Legge i file e calcola costo e token senza tradurre nulla.
+*   `--reflect`: Attiva la modalità di auto-riflessione (vedi sezione Funzionalità Avanzate).
+
+#### Opzioni Specifiche per Formato
+*   **CSV:**
+    *   `--delimiter`: Carattere separatore (es. `,` o `;`).
+    *   `--translate-col`: Numero colonna da leggere (0 per la prima colonna).
+    *   `--output-col`: Numero colonna dove scrivere la traduzione.
+*   **JSON:**
+    *   `--json-keys`: Lista chiavi da tradurre (es. `name,description`). Obbligatorio.
+    *   `--match-full-json-path`: Se attivo, cerca la chiave includendo i genitori (es. `items.sword.name`).
+*   **Excel:**
+    *   `--xlsx-source-col`: Lettera colonna origine (es. A).
+    *   `--xlsx-target-col`: Lettera colonna destinazione (es. B).
+
+---
+
+## Funzionalità Avanzate
+
+### Smart Batching
+Tradizionalmente, i tool di traduzione inviano una frase alla volta. Alumen raggruppa fino a 50 frasi in un unico pacchetto (Batch).
+*   **Vantaggio:** Velocità aumentata fino a 20 volte.
+*   **Funzionamento:** Lo script calcola la lunghezza delle frasi. Se un gruppo di frasi supera il limite di token del modello, il pacchetto viene chiuso e inviato automaticamente per evitare errori, anche se non ha raggiunto il numero massimo di righe.
+
+### Agentic Reflection
+Attivabile con il flag `--reflect`.
+Questa modalità utilizza un processo a due fasi per ogni blocco di testo:
+1.  **Traduzione:** Il modello traduce il testo.
+2.  **Critica:** Il modello rilegge la propria traduzione cercando errori grammaticali, incongruenze di genere o tono, e li corregge.
+*   **Nota:** Questa modalità raddoppia i tempi di esecuzione e i costi API, ma garantisce la massima qualità possibile.
+
+### Glossario e Guide di Stile
+*   **Glossario:** Creare un file CSV con due colonne: `Termine Originale,Termine Tradotto`. Alumen inietterà queste regole nel cervello dell'AI, forzandola a usare la terminologia specifica (es. "Potion" -> "Pozione").
+*   **Style Guide:** È possibile fornire un file `.txt` con istruzioni discorsive (es. "Usa un tono medievale", "Dai del Voi ai personaggi").
+
+### Dry Run (Preventivo)
+Il flag `--dry-run` è utile prima di iniziare un grande progetto. Lo script analizzerà tutti i file nella cartella di input e fornirà un report contenente:
+*   Numero totale di caratteri.
+*   Stima dei token totali.
+*   Stima del costo economico (basato sui prezzi pubblici di Gemini Flash).
+Il processo termina immediatamente dopo il report senza effettuare traduzioni.
+
+---
+
+## Dettagli Formati File Supportati
+
+### CSV (Comma Separated Values)
+Ideale per tabelle di dati. È possibile specificare quale colonna leggere e in quale scrivere. Se la colonna di destinazione è diversa da quella di origine, l'originale viene preservato.
+
+### Excel (XLSX)
+Supporto nativo per fogli di calcolo moderni. Lo script legge dalla colonna specificata (default A) e scrive nella colonna specificata (default B). Non altera formattazione o formule nelle altre celle.
+
+### JSON
+Supporta file JSON annidati. Poiché i JSON contengono anche dati di struttura, è **obbligatorio** specificare quali chiavi contengono testo traducibile usando l'argomento `--json-keys`.
+
+### PO (Gettext)
+Standard per la traduzione di software Linux e web. Alumen legge il `msgid` e scrive nel `msgstr`. Supporta contesti (`msgctxt`).
+
+### SRT (Sottotitoli)
+Formatta il file rispettando i timecode. Traduce solo i blocchi di testo, lasciando invariati i numeri di sequenza e le indicazioni temporali.
+
+---
+
+## Utility: Estrattore di Cache
+
+Lo script `cache_extractor.py` permette di creare un file di cache partendo da traduzioni esistenti. Questo è utile se si possiede già la versione inglese e italiana di un gioco precedente e si vuole insegnare ad Alumen quelle traduzioni.
+
+### Utilizzo
+```bash
+python cache_extractor.py --source-dir "cartella_originale" --target-dir "cartella_tradotta" --file-type csv --source-col 0 --target-col 1
+```
+Lo script genererà un file `alumen_cache.json` che potrà essere letto da `AlumenCore.py` abilitando l'opzione `--persistent-cache`.
+
+---
+
+## Utility: Integrazione Telegram
+
+Alumen può essere controllato e monitorato da remoto tramite Telegram.
+
+### Configurazione
+1.  Creare un bot tramite `@BotFather` su Telegram e ottenere il Token.
+2.  Ottenere il proprio Chat ID tramite `@userinfobot`.
+3.  Creare un file `telegram_config.json` nella cartella dello script:
     ```json
     {
-      "bot_token": "IL_TUO_TOKEN_API_QUI",
-      "chat_id": "IL_TUO_CHAT_ID_NUMERICO_QUI"
+      "bot_token": "IL_TUO_TOKEN",
+      "chat_id": "IL_TUO_CHAT_ID"
     }
     ```
-4.  **Avvia lo script** con il flag `--telegram`.
 
-## Argomenti da Riga di Comando
-
-### Configurazione API e Modello
-
+### Utilizzo
+Avviare `AlumenCore.py` o la GUI assicurandosi che l'opzione Telegram sia attiva (flag `--telegram` da riga di comando).
+Il bot invierà notifiche sullo stato di avanzamento e accetterà comandi come:
+*   `/status`: Mostra statistiche e file correntemente in lavorazione.
+*   `/stop`: Richiede l'arresto sicuro dello script.
 | Argomento | Descrizione | Default |
 | :--- | :--- | :--- |
 | **`--api`** | Specifica una o più chiavi API Gemini, separate da virgola. | - |
