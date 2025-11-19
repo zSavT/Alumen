@@ -125,6 +125,7 @@ Per usare il monitoraggio e i comandi da remoto, segui questi passaggi:
 | **`--rpm`** | Numero massimo di richieste API a Gemini per minuto (Rate Limit). | Nessun limite |
 | **`--enable-file-context`** | **Abilita il Contesto Intelligente del File.** Analizza le prime 15 frasi del file per generare un contesto. | `False` |
 | **`--full-context-sample`** | **[Necessita `--enable-file-context`]** Utilizza **tutte** le frasi valide nel file per generare il contesto. | `False` |
+| **`--context-window N`** | Crea una memoria a breve termine (deque) che inserisce nel prompt le traduzioni precedenti, N è il numero di traduzioni precedenti da passare. | 0 (nessun testo) |
 
 ### A Capo Automatico (Word Wrapping)
 
@@ -143,6 +144,7 @@ Per usare il monitoraggio e i comandi da remoto, segui questi passaggi:
 | **`--resume`** | Tenta di riprendere la traduzione da file parziali (supportato per CSV). Per JSON/PO, riutilizza le traduzioni in cache. | `False` |
 | **`--rotate-on-limit-or-error`** | Passa alla API key successiva in caso di errore o limite RPM. | `False` |
 | **`--persistent-cache`** | Attiva la cache persistente su file (`alumen_cache.json`). | `False` |
+| **`--server`** | non blacklista mai le API key per errori o limiti giornalieri, ma riprova all'infinito sulla stessa chiave. | `False` |
 
 -----
 

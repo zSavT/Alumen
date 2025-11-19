@@ -17,6 +17,8 @@ import json
 import polib
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 import logging
+# --- MODIFICA: Import per la 'memoria' (finestra di contesto) ---
+from collections import deque
 
 import telegram_bot
 
@@ -39,7 +41,7 @@ LOG_FILE_NAME = "log.txt"
 CACHE_FILE_NAME = "alumen_cache.json"
 BASE_API_CALL_INTERVAL_SECONDS = 0.2
 FILE_CONTEXT_SAMPLE_SIZE = 15
-CURRENT_SCRIPT_VERSION = "1.5.1"
+CURRENT_SCRIPT_VERSION = "1.5.2"
 GITHUB_REPO = "zSavT/Alumen"
 
 # ----- Variabili Globali -----
@@ -72,7 +74,7 @@ current_file_context = None
 current_file_total_entries = 0
 current_file_processed_entries = 0
 last_translation_prompt = None
-max_entries_limit = 11100
+max_entries_limit = 1010000
 
 ALUMEN_ASCII_ART = """
 
@@ -143,6 +145,10 @@ def get_script_args_updated():
     translation_group.add_argument("--rpm", type=int, default=None, help="Numero massimo di richieste API a Gemini per minuto.")
     translation_group.add_argument("--enable-file-context", action="store_true", help="Abilita l'analisi di un campione del file per generare un contesto generale da usare in tutte le traduzioni del file.")
     translation_group.add_argument("--full-context-sample", action="store_true", help="[Necessita --enable-file-context] Utilizza TUTTE le frasi valide nel file per generare il contesto generale.")
+    
+    # --- MODIFICA: Aggiunta del flag --context-window ---
+    translation_group.add_argument("--context-window", type=int, default=0, help="Dimensione (N) della 'finestra di contesto dinamica'. Aggiunge le ultime N traduzioni (coppie sorgente->destinazione) al prompt. Default: 0 (disabilitato). Riduce l'efficacia della cache.")
+    
     wrapping_group.add_argument("--wrap-at", type=int, default=None, help="Lunghezza massima della riga per a capo automatico.")
     wrapping_group.add_argument("--newline-char", type=str, default='\\n', help="Carattere da usare per l'a capo automatico.")
     utility_group.add_argument("--enable-file-log", action="store_true", help=f"Attiva la scrittura di un log ('{LOG_FILE_NAME}').")
@@ -151,6 +157,8 @@ def get_script_args_updated():
     utility_group.add_argument("--rotate-on-limit-or-error", action="store_true", help="Passa alla API key successiva in caso di errore o limite RPM.")
     utility_group.add_argument("--persistent-cache", action="store_true", help=f"Attiva la cache persistente su file ('{CACHE_FILE_NAME}').")
     utility_group.add_argument("--telegram", action="store_true", help="Abilita il logging e i comandi tramite un bot Telegram.")
+    utility_group.add_argument("--server", action="store_true", help="Modalità server: non blacklista mai le API key per errori o limiti giornalieri, ma riprova all'infinito sulla stessa chiave.")
+
 
     parsed_args = parser.parse_args()
     if parsed_args.delimiter == '\\t': parsed_args.delimiter = '\t'
@@ -339,39 +347,43 @@ def remove_api_key(index_str, is_telegram: bool = False):
         if is_telegram: return msg
         console.print(f"[red]{msg}[/]")
 
-def blacklist_specific_api_key(index_str, is_telegram: bool = False):
+def blacklist_current_api_key(is_telegram: bool = False):
     global current_api_key_index, blacklisted_api_key_indices
-    try:
-        index = int(index_str)
-        if not (0 <= index < len(available_api_keys)):
-            msg = f"🛑 ERRORE: Indice {index} fuori dal range valido."
-            if is_telegram: return msg
-            console.print(f"[red]{msg}[/]")
-            return
-
-        if index in blacklisted_api_key_indices:
-            msg = f"ℹ️  L'API Key ...{available_api_keys[index][-4:]} è già in blacklist."
-            if is_telegram: return msg
-            console.print(f"[yellow]{msg}[/]")
-            return
-
-        key_suffix = available_api_keys[index][-4:]
-        blacklisted_api_key_indices.add(index)
-        msg = f"✅ API Key ...{key_suffix} all'indice {index} aggiunta alla blacklist."
-        write_to_log(f"COMANDO: API Key ...{key_suffix} blacklisted.")
-        if index == current_api_key_index:
-            rotate_api_key(triggered_by_user=True, reason_override="Key blacklisted da comando")
+    
+    if current_api_key_index in blacklisted_api_key_indices:
+        msg = f"ℹ️  L'API Key ...{available_api_keys[current_api_key_index][-4:]} è già in blacklist."
         if is_telegram: return msg
-        console.print(f"[green]{msg}[/]")
+        console.print(f"[yellow]{msg}[/]")
+        # --- MODIFICA INIZIO ---
+        # Se è già in blacklist, dobbiamo comunque tentare di ruotare per trovare una chiave valida.
+        # Restituiamo il risultato della rotazione.
+        return rotate_api_key(triggered_by_user=True, reason_override="Key già blacklisted")
+        # --- MODIFICA FINE ---
 
-    except ValueError:
-        msg = "🛑 ERRORE: L'indice deve essere un numero intero."
-        if is_telegram: return msg
-        console.print(f"[red]{msg}[/]")
-    except Exception as e:
-        msg = f"🛑 ERRORE: Impossibile blackistare la chiave API: {e}"
-        if is_telegram: return msg
-        console.print(f"[red]{msg}[/]")
+    blacklisted_api_key_indices.add(current_api_key_index)
+    key_suffix = available_api_keys[current_api_key_index][-4:]
+    msg = f"✅ API Key ...{key_suffix} aggiunta alla blacklist."
+    
+    # Se non è una chiamata da telegram, è un errore API, non un "COMANDO"
+    if not is_telegram:
+        write_to_log(f"BLACKLIST: {msg} (Quota esaurita o chiave non valida)")
+    else:
+        write_to_log(f"COMANDO: {msg}")
+    
+    # --- MODIFICA INIZIO ---
+    # Chiamiamo la rotazione e salviamo il risultato
+    # 'triggered_by_user' è corretto, indica che la rotazione è forzata
+    reason = "Key blacklisted da comando" if is_telegram else "Key esaurita/invalida"
+    rotation_success = rotate_api_key(triggered_by_user=True, reason_override=reason)
+    # --- MODIFICA FINE ---
+    
+    if is_telegram: return msg
+    console.print(f"[green]{msg}[/]")
+
+    # --- MODIFICA INIZIO ---
+    # Restituiamo il risultato della rotazione (True se ok, False se non ci sono più chiavi)
+    return rotation_success
+    # --- MODIFICA FINE ---
 
 def clear_blacklisted_keys(is_telegram: bool = False):
     global blacklisted_api_key_indices
@@ -544,9 +556,7 @@ def display_colored_prompt(is_telegram: bool = False):
 def rotate_api_key(triggered_by_user=False, reason_override=None):
     global current_api_key_index, major_failure_count, model, blacklisted_api_key_indices
     usable_keys_count = len(available_api_keys) - len(blacklisted_api_key_indices)
-    if usable_keys_count <= 1 and current_api_key_index not in blacklisted_api_key_indices:
-        console.print("⚠️  Solo una API key utilizzabile disponibile. Impossibile ruotare.", style="yellow")
-        return False
+
     if usable_keys_count == 0:
         console.print("🛑 ERRORE CRITICO: Tutte le API key sono state blacklisted. Impossibile proseguire.", style="bold red")
         write_to_log("ERRORE CRITICO: Tutte le API key sono state blacklisted.")
@@ -576,8 +586,6 @@ def rotate_api_key(triggered_by_user=False, reason_override=None):
         console.print(f"✅ Rotazione completata. Nuova API Key attiva: [green]...{new_api_key[-4:]}[/]")
         if script_args.telegram:
             telegram_bot.send_telegram_notification(f"✅ *Rotazione completata.*\n*Nuova API Key attiva:* `...{new_api_key[-4:]}`")
-
-        major_failure_count = 0
         return True
     except Exception as e:
         console.print(f"❌ [red]ERRORE: Configurazione nuova API Key fallita: {e}[/]")
@@ -595,21 +603,6 @@ def rotate_api_key(triggered_by_user=False, reason_override=None):
         else:
             log_critical_error_and_exit("Fallita rotazione API e la chiave precedente è blacklisted. Nessuna chiave utilizzabile.")
         return False
-
-def blacklist_current_api_key(is_telegram: bool = False):
-    global current_api_key_index, blacklisted_api_key_indices
-    if current_api_key_index in blacklisted_api_key_indices:
-        msg = f"ℹ️  L'API Key ...{available_api_keys[current_api_key_index][-4:]} è già in blacklist."
-        if is_telegram: return msg
-        console.print(f"[yellow]{msg}[/]")
-        return
-    blacklisted_api_key_indices.add(current_api_key_index)
-    key_suffix = available_api_keys[current_api_key_index][-4:]
-    msg = f"✅ API Key ...{key_suffix} aggiunta alla blacklist."
-    write_to_log(f"COMANDO: {msg}")
-    rotate_api_key(triggered_by_user=True, reason_override="Key blacklisted")
-    if is_telegram: return msg
-    console.print(f"[green]{msg}[/]")
 
 def show_stats(title="📊 STATISTICHE DI ESECUZIONE", is_telegram: bool = False):
     end_time = time.time()
@@ -956,22 +949,70 @@ def _call_generative_model_for_translation(prompt_text):
         raise ValueError("Risposta dall'API non valida o vuota.")
     return response_obj.text.strip()
 
+
+def _call_generative_model_for_translation(prompt_text):
+    global last_translation_prompt
+    wait_for_rpm_limit()
+    time.sleep(BASE_API_CALL_INTERVAL_SECONDS)
+    last_translation_prompt = prompt_text
+    response_obj = model.generate_content(prompt_text)
+    if not response_obj or not hasattr(response_obj, 'text'):
+        raise ValueError("Risposta dall'API non valida o vuota.")
+    return response_obj.text.strip()
+
 def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_context=None):
     global major_failure_count, user_command_skip_api, model, translation_cache, cache_hit_count, api_call_counts, BLACKLIST_TERMS
+
+    #if args.source_lang.lower() == "inglese" and not text_to_translate.isascii():
+    #    content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {text_to_translate}")
+    #    console.print(Panel(content, title=f"[bold yellow]⏭️  SKIP (Non-ASCII)[/] | {context_for_log}", border_style="yellow", title_align="left"))
+    #    write_to_log(f"SKIP (Non-ASCII): Rilevato testo non-ASCII con source_lang 'inglese'. Contesto: {context_for_log}")
+    #    return text_to_translate
+
     if text_to_translate.strip() in BLACKLIST_TERMS:
         return text_to_translate
-    if not determine_if_translatable(text_to_translate): return text_to_translate
     
-    cache_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
-    cache_key = json.dumps(cache_key_tuple, ensure_ascii=False)
-    
-    if cache_key in translation_cache:
-        cache_hit_count += 1
-        translated_text = translation_cache[cache_key]
 
+    if not determine_if_translatable(text_to_translate):
+        content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {text_to_translate}")
+        console.print(Panel(content, title=f"[bold yellow]⏭️  SKIP (Non-Translatable)[/] | {context_for_log}", border_style="yellow", title_align="left"))
+        write_to_log(f"SKIP (Non-Translatable): Testo non idoneo alla traduzione (es. ID, numero, solo simboli). Contesto: {context_for_log}")
+        return text_to_translate
+    
+    # --- MODIFICA INIZIO: Logica Cache a Due Passi (Retrocompatibile) ---
+
+    # 1. Crea la chiave NUOVA (con contesto dinamico, se esiste)
+    context_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context, dynamic_context)
+    context_key = json.dumps(context_key_tuple, ensure_ascii=False)
+    
+    # 2. Cerca la chiave NUOVA (specifica per il contesto)
+    if context_key in translation_cache:
+        cache_hit_count += 1
+        translated_text = translation_cache[context_key]
         content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
-        console.print(Panel(content, title=f"[bold green]💾 CACHE[/] | {context_for_log}", border_style="green", title_align="left"))
+        console.print(Panel(content, title=f"[bold green]💾 CACHE (Contesto)[/] | {context_for_log}", border_style="green", title_align="left"))
         return translated_text
+
+    # 3. Se la chiave NUOVA fallisce E stiamo usando un contesto, cerca la chiave VECCHIA (generica)
+    #    (Se dynamic_context è None, context_key e generic_key sono identici, quindi questo blocco viene saltato correttamente)
+    if dynamic_context:
+        generic_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
+        generic_key = json.dumps(generic_key_tuple, ensure_ascii=False)
+        
+        if generic_key in translation_cache:
+            cache_hit_count += 1
+            translated_text = translation_cache[generic_key]
+            
+            # "Promuovi" la vecchia voce di cache salvandola anche sotto la nuova chiave
+            translation_cache[context_key] = translated_text
+            write_to_log(f"CACHE HIT (Generico): Promossa traduzione per {context_for_log}")
+
+            content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
+            console.print(Panel(content, title=f"[bold green]💾 CACHE (Generico)[/] | {context_for_log}", border_style="green", title_align="left"))
+            return translated_text
+    
+    # Se siamo qui, è un vero CACHE MISS. La traduzione avverrà più avanti.
+    # --- MODIFICA FINE ---
         
     if args.custom_prompt:
         if "{text_to_translate}" not in args.custom_prompt:
@@ -980,10 +1021,24 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
         prompt_text = args.custom_prompt.format(text_to_translate=text_to_translate)
     else:
         blacklist_str = ", ".join(BLACKLIST_TERMS)
-        prompt_base = f"Traduci il seguente testo da {args.source_lang} a {args.target_lang}, tenendo conto del contesto del gioco '{args.game_name}' e utilizzando uno stile che includa eventuali slang o espressioni colloquiali appropriate al contesto e quindi adattando il testo se serve. ISTRUZIONE CRITICA: preserva esattamente tutti gli a capo originali (come `\\n` o `\\r\\n`) presenti nel testo. Inoltre, preserva eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player). Assicurati di mantenere identici i seguenti termini che NON devono essere tradotti, anche se appaiono in frasi più lunghe: {blacklist_str}. In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."
+        
+        prompt_lines = [
+            f"Il tuo compito è tradurre testo ESCLUSIVAMENTE da {args.source_lang} a {args.target_lang}.",
+            f"ISTRUZIONE CRITICA: Se il 'Testo originale' fornito di seguito NON è in {args.source_lang} (ad esempio, se è in giapponese, coreano, o qualsiasi altra lingua), DEVI restituire il testo originale identico, senza alcuna traduzione o modifica.",
+            f"Solo se il testo è in {args.source_lang}, traducilo tenendo conto del contesto del gioco '{args.game_name}' e utilizzando uno stile che includa eventuali slang o espressioni colloquiali appropriate al contesto, adattando il testo se serve.",
+            "ISTRUZIONE CRITICA 2: Preserva sempre esattamente tutti gli a capo originali (come `\\n` o `\\r\\n`) presenti nel testo.",
+            "Inoltre, preserva eventuali tag HTML, placeholder (come [p], {{player_name}}), o codici speciali (come ad esempio stringhe con codici tipo: talk_id_player).",
+            f"Assicurati di mantenere identici i seguenti termini che NON devono essere tradotti, anche se appaiono in frasi più lunghe: {blacklist_str}.",
+            "In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."
+        ]
+        prompt_base = " ".join(prompt_lines)
+        
+        # --- MODIFICA: Iniezione del contesto (statico + dinamico) ---
         if args.prompt_context: prompt_base += f"\nIstruzione aggiuntiva: {args.prompt_context}."
-        if dynamic_context: prompt_base += f"\nContesto aggiuntivo per questa traduzione: '{dynamic_context}'."
+        if dynamic_context: prompt_base += f"\n{dynamic_context}" # Questo ora includerà sia il contesto statico SIA la finestra dinamica
         prompt_base += "\nRispondi solo con la traduzione diretta."
+        # --- FINE MODIFICA ---
+
         prompt_text = f"{prompt_base}\nTesto originale:\n{text_to_translate}\n\nTraduzione in {args.target_lang}:"
         
     while True:
@@ -991,12 +1046,10 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
         
         if command_lock.acquire(blocking=False):
             try:
-                # Controlla prima 'skip file'
                 if user_command_skip_file:
                     console.print("    [yellow]➡️  Comando 'skip file' rilevato. Interruzione della traduzione corrente...[/]")
-                    return text_to_translate # Questo interrompe il loop while True
+                    return text_to_translate 
 
-                # Altrimenti, controlla 'skip api'
                 if user_command_skip_api:
                     rotate_api_key(triggered_by_user=True)
                     user_command_skip_api = False
@@ -1012,19 +1065,50 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
             content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
             console.print(Panel(content, title=f"{context_for_log}", border_style="blue", title_align="left"))
             
-            translation_cache[cache_key] = translated_text
-            write_to_log(f"CACHE MISS: Nuova traduzione salvata in cache per il contesto: {context_for_log}")
+            # --- MODIFICA: Salvataggio in cache con la chiave contestuale ---
+            translation_cache[context_key] = translated_text
+            write_to_log(f"CACHE MISS: Nuova traduzione (contestuale) salvata in cache per: {context_for_log}")
+            # --- FINE MODIFICA ---
             return translated_text
+        
         except google.api_core.exceptions.PermissionDenied as e:
-            console.print(f"    🛑 Chiave API ...{available_api_keys[current_api_key_index][-4:]} non valida o disabilitata. Verrà messa in blacklist.", style="red")
-            write_to_log(f"ERRORE PERMESSO: {context_for_log}, Key ...{available_api_keys[current_api_key_index][-4:]}. Errore: {e}")
-            if blacklist_current_api_key():
-                continue
-            else:
-                return text_to_translate
-        except TRANSIENT_API_EXCEPTIONS as e:
-            major_failure_count += 1
             active_key_short = available_api_keys[current_api_key_index][-4:]
+            if args.server:
+                console.print(f"    ⚠️  [SERVER MODE] Chiave API ...{active_key_short} non valida. Attendo 60 secondi e riprovo...", style="yellow")
+                write_to_log(f"SERVER MODE: 'Permission Denied' su Key ...{active_key_short}. Attendo 60s. Errore: {e}")
+                time.sleep(60) 
+                continue 
+            else:
+                console.print(f"    🛑 Chiave API ...{active_key_short} non valida o disabilitata. Verrà messa in blacklist.", style="red")
+                write_to_log(f"ERRORE PERMESSO: {context_for_log}, Key ...{active_key_short}. Errore: {e}")
+                if blacklist_current_api_key():
+                    continue
+                else:
+                    log_critical_error_and_exit(f"Nessuna API key valida disponibile dopo un errore di 'Permission Denied' sulla chiave ...{active_key_short}.")
+                    return text_to_translate 
+
+        except TRANSIENT_API_EXCEPTIONS as e:
+            
+            error_message = str(e).lower()
+            active_key_short = available_api_keys[current_api_key_index][-4:]
+            
+            if isinstance(e, google.api_core.exceptions.ResourceExhausted) and ("day" in error_message or "daily" in error_message):
+                
+                if args.server:
+                    console.print(f"    ⚠️  [SERVER MODE] Limite quota GIORNALIERA raggiunto per ...{active_key_short}. Attendo 60 secondi e riprovo...", style="yellow")
+                    write_to_log(f"SERVER MODE: Limite quota GIORNALIERA su Key ...{active_key_short}. Attendo 60s. Errore: {e}")
+                    time.sleep(60) 
+                    continue 
+                else:
+                    console.print(f"    🛑 Limite quota GIORNALIERA raggiunto per la chiave ...{active_key_short}. Verrà messa in blacklist.", style="red")
+                    write_to_log(f"ERRORE QUOTA GIORNALIERA: {context_for_log}, Key ...{active_key_short}. Errore: {e}")
+                    if blacklist_current_api_key():  
+                        continue  
+                    else:
+                        log_critical_error_and_exit(f"Nessuna API key valida disponibile dopo un errore di 'Quota Giornaliera' sulla chiave ...{active_key_short}.")
+                        return text_to_translate 
+
+            major_failure_count += 1
             console.print(f"    ❌ Fallimento definitivo traduzione con Chiave ...{active_key_short}. Errore: {e}. Fallimenti consecutivi: {major_failure_count}/{MAX_MAJOR_FAILURES_THRESHOLD}", style="red")
             if args.rotate_on_limit_or_error and rotate_api_key(reason_override="Errore API"):
                 continue
@@ -1073,7 +1157,11 @@ def traduci_testo_po(input_file, output_file, args):
         if should_translate_msgctxt(entry.msgctxt): all_texts_in_file.append(entry.msgctxt)
 
     all_translations_cached = all(
-        json.dumps((text, args.source_lang, args.target_lang, args.game_name, args.prompt_context), ensure_ascii=False) in translation_cache
+        # Controllo semplificato: se ANCHE SOLO UNA chiave generica esiste, non possiamo
+        # garantire che la cache copra il nuovo contesto.
+        # Per una vera "all_cached" dovremmo controllare la chiave contestuale, ma è troppo complesso.
+        # Quindi, se --context-window > 0, forziamo la ri-traduzione (la cache a 2 passi funzionerà)
+        args.context_window == 0 and json.dumps((text, args.source_lang, args.target_lang, args.game_name, args.prompt_context), ensure_ascii=False) in translation_cache
         for text in all_texts_in_file
     ) if all_texts_in_file else False
     
@@ -1097,6 +1185,9 @@ def traduci_testo_po(input_file, output_file, args):
         
         if all_translations_cached and args.enable_file_context:
              console.print(f"  Tutte le traduzioni per '{file_basename}' sono già in cache. Salto la generazione del contesto.")
+
+        # --- MODIFICA: Inizializza la finestra di contesto ---
+        dynamic_context_window = deque(maxlen=args.context_window)
 
         with Progress(
             SpinnerColumn(),
@@ -1125,7 +1216,24 @@ def traduci_testo_po(input_file, output_file, args):
                 
                 if context_is_translatable_prose:
                     progress.update(task, description=f"[cyan]PO '{os.path.basename(input_file)}'[/] | Riga {entry.linenum} (ctx)")
-                    translated_context = get_translation_from_api(original_context, context_log, args)
+                    
+                    # --- MODIFICA: Costruzione contesto per msgctxt ---
+                    context_parts = []
+                    if current_file_context:
+                        context_parts.append(f"Contesto generale del file: '{current_file_context}'")
+                    if args.context_window > 0 and dynamic_context_window:
+                        context_lines = [f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
+                        for src, trans in dynamic_context_window:
+                            context_lines.append(f'- "{src}" -> "{trans}"')
+                        context_parts.append("\n".join(context_lines))
+                    final_dynamic_context = "\n".join(context_parts)
+                                                
+                    translated_context = get_translation_from_api(original_context, context_log, args, dynamic_context=final_dynamic_context)
+                    
+                    if args.context_window > 0:
+                        dynamic_context_window.append((original_context, translated_context))
+                    # --- FINE MODIFICA ---
+
                     entry.msgctxt = translated_context
                     context_for_prompt = translated_context
                     total_entries_translated += 1
@@ -1135,10 +1243,28 @@ def traduci_testo_po(input_file, output_file, args):
                 
                 if entry.msgid and determine_if_translatable(entry.msgid):
                     progress.update(task, description=f"[cyan]PO '{os.path.basename(input_file)}'[/] | Riga {entry.linenum} (msgid)")
-                    final_dynamic_context = " - ".join(filter(None, [f"Contesto Generale: {current_file_context}" if current_file_context else None, f"Contesto Entry: {context_for_prompt}" if context_for_prompt else None]))
+                    
+                    # --- MODIFICA: Costruzione contesto per msgid ---
+                    context_parts = []
+                    if current_file_context:
+                        context_parts.append(f"Contesto generale del file: '{current_file_context}'")
+                    if context_for_prompt: # Aggiunge il contesto specifico dell'entry (originale o tradotto)
+                        context_parts.append(f"Contesto specifico di questa entry: '{context_for_prompt}'")
+                    
+                    if args.context_window > 0 and dynamic_context_window:
+                        context_lines = [f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
+                        for src, trans in dynamic_context_window:
+                            context_lines.append(f'- "{src}" -> "{trans}"')
+                        context_parts.append("\n".join(context_lines))
+                    
+                    final_dynamic_context = "\n".join(context_parts)
                     
                     original_msgid = entry.msgid
                     translated_text = get_translation_from_api(original_msgid, msgid_log, args, dynamic_context=final_dynamic_context)
+                    
+                    if args.context_window > 0:
+                        dynamic_context_window.append((original_msgid, translated_text))
+                    # --- FINE MODIFICA ---
                     
                     entry.msgstr = translated_text
                     total_entries_translated += 1
@@ -1178,13 +1304,18 @@ def traduci_testo_json(input_file, output_file, args):
     _extract_json_sample_texts(data, keys_to_translate, all_texts_in_file, match_full=args.match_full_json_path, limit=None)
 
     all_translations_cached = all(
-        json.dumps((text, args.source_lang, args.target_lang, args.game_name, args.prompt_context), ensure_ascii=False) in translation_cache
+        args.context_window == 0 and json.dumps((text, args.source_lang, args.target_lang, args.game_name, args.prompt_context), ensure_ascii=False) in translation_cache
         for text in all_texts_in_file
     ) if all_texts_in_file else False
 
+    # --- MODIFICA: Inizializza la finestra di contesto ---
+    dynamic_context_window = deque(maxlen=args.context_window)
+
     progress = None
     task = None
-    def _translate_recursive(obj, path=""):
+    
+    # --- MODIFICA: La funzione ricorsiva accetta la finestra di contesto ---
+    def _translate_recursive(obj, path="", context_window=None):
         nonlocal progress, task
         global total_entries_translated, current_file_processed_entries
         if isinstance(obj, dict):
@@ -1201,17 +1332,37 @@ def traduci_testo_json(input_file, output_file, args):
                     progress.update(task, description=f"[cyan]JSON '{file_basename}'[/] | Chiave: {current_path[:30]}...")
                     original_value = value
                     context_log = f"JSON '{file_basename}' | Chiave: '{current_path}'"
-                    translated_value = get_translation_from_api(original_value, context_log, args, dynamic_context=current_file_context)
+                    
+                    # --- MODIFICA: Costruzione contesto per JSON ---
+                    context_parts = []
+                    if current_file_context:
+                        context_parts.append(f"Contesto generale del file: '{current_file_context}'")
+                    if args.context_window > 0 and context_window:
+                        context_lines = [f"Ecco le {len(context_window)} traduzioni più recenti. Usale per coerenza:"]
+                        for src, trans in context_window:
+                            context_lines.append(f'- "{src}" -> "{trans}"')
+                        context_parts.append("\n".join(context_lines))
+                    
+                    final_dynamic_context = "\n".join(context_parts)
+                    
+                    translated_value = get_translation_from_api(original_value, context_log, args, dynamic_context=final_dynamic_context)
+                    
+                    if args.context_window > 0 and context_window is not None:
+                        context_window.append((original_value, translated_value))
+                    # --- FINE MODIFICA ---
                     
                     obj[key] = translated_value
                     if args.translation_only_output: translated_texts_for_only_output.append(translated_value)
                     progress.advance(task)
                     total_entries_translated += 1
                     current_file_processed_entries += 1
-                _translate_recursive(value, current_path)
+                
+                # --- MODIFICA: Passa la finestra di contesto alla chiamata ricorsiva ---
+                _translate_recursive(value, current_path, context_window=context_window)
         elif isinstance(obj, list):
             for i, item in enumerate(obj):
-                _translate_recursive(item, f"{path}[{i}]")
+                # --- MODIFICA: Passa la finestra di contesto alla chiamata ricorsiva ---
+                _translate_recursive(item, f"{path}[{i}]", context_window=context_window)
     
     try:
         if args.enable_file_context and not all_translations_cached:
@@ -1242,7 +1393,10 @@ def traduci_testo_json(input_file, output_file, args):
         ) as progress_instance:
             progress = progress_instance
             task = progress.add_task(f"[cyan]JSON '{file_basename}'[/]", total=current_file_total_entries)
-            _translate_recursive(data)
+            
+            # --- MODIFICA: Passa la finestra di contesto alla chiamata iniziale ---
+            _translate_recursive(data, context_window=dynamic_context_window)
+
     except KeyboardInterrupt:
         with command_lock: is_skip_command = user_command_skip_file
         if is_skip_command: console.print(f"\n[yellow]➡️  Comando 'skip file' ricevuto. Salvataggio dei progressi per '{file_basename}'...[/]")
@@ -1284,7 +1438,7 @@ def traduci_testo_csv(input_file, output_file, args):
         if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col])
     ]
     all_translations_cached = all(
-        json.dumps((text, args.source_lang, args.target_lang, args.game_name, args.prompt_context), ensure_ascii=False) in translation_cache
+        args.context_window == 0 and json.dumps((text, args.source_lang, args.target_lang, args.game_name, args.prompt_context), ensure_ascii=False) in translation_cache
         for text in all_texts_in_file
     ) if all_texts_in_file else False
     
@@ -1318,6 +1472,9 @@ def traduci_testo_csv(input_file, output_file, args):
         
         current_file_processed_entries = 0
         
+        # --- MODIFICA: Inizializza la finestra di contesto ---
+        dynamic_context_window = deque(maxlen=args.context_window)
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -1342,7 +1499,24 @@ def traduci_testo_csv(input_file, output_file, args):
                 original_text = row[args.translate_col]
                 progress.update(task, description=f"[cyan]CSV '{file_basename}'[/] | Riga {display_row_num}")
                 context_log = f"CSV '{file_basename}' | Riga {display_row_num}"
-                translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=current_file_context)
+                
+                # --- MODIFICA: Costruzione contesto per CSV ---
+                context_parts = []
+                if current_file_context:
+                    context_parts.append(f"Contesto generale del file: '{current_file_context}'")
+                if args.context_window > 0 and dynamic_context_window:
+                    context_lines = [f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
+                    for src, trans in dynamic_context_window:
+                        context_lines.append(f'- "{src}" -> "{trans}"')
+                    context_parts.append("\n".join(context_lines))
+                
+                final_dynamic_context = "\n".join(context_parts)
+                
+                translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=final_dynamic_context)
+                
+                if args.context_window > 0:
+                    dynamic_context_window.append((original_text, translated_text))
+                # --- FINE MODIFICA ---
                 
                 while len(row) <= args.output_col: row.append('')
                 row[args.output_col] = translated_text
