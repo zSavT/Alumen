@@ -34,7 +34,7 @@ Alumen richiede che **Python 3.10** o versioni successive sia installato sul sis
 Per utilizzare Alumen e tutte le sue funzionalità (incluso il supporto Excel e Telegram), è necessario installare le dipendenze tramite il terminale:
 
 ```bash
-pip install google-generativeai polib openpyxl rich tenacity packaging "python-telegram-bot[job-queue]"
+pip install google-generativeai polib openpyxl rich tenacity packaging "python-telegram-bot[job-queue]" thefuzz
 ```
 
 ---

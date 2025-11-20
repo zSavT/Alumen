@@ -152,6 +152,13 @@ def normalize_text_for_fuzzy(text):
     if t and t[-1] in ".,;!?'\"": t = t[:-1]
     return t
 
+def _excel_col_to_index(col_str):
+    """Converte una lettera di colonna Excel (es. 'A', 'B', 'AA') in un indice 0-based."""
+    index = 0
+    for char in col_str.upper():
+        index = index * 26 + (ord(char) - ord('A') + 1)
+    return index - 1
+
 def _load_glossary_dict(filepath):
     g_dict = {}
     if filepath and os.path.exists(filepath):
@@ -184,6 +191,11 @@ def _build_system_instruction_text(args, glossary_dict):
         parts.append("Nessun glossario specifico fornito.")
 
     if args.prompt_context: parts.append(f"\n--- CONTESTO EXTRA ---\n{args.prompt_context}")
+    
+    if args.style_guide and os.path.exists(args.style_guide):
+        with open(args.style_guide, 'r', encoding='utf-8') as f:
+            parts.append(f"\n--- GUIDA DI STILE ---\n{f.read()}")
+
     if args.custom_prompt: parts.append(f"\n--- ISTRUZIONI UTENTE ---\n{args.custom_prompt}")
 
     parts.append("\n--- FORMATO OUTPUT ---")
@@ -701,31 +713,13 @@ def process_xlsx(fpath, outpath, args, stop_event):
     wb = openpyxl.load_workbook(fpath)
     ws = wb.active
     entries = []
+    src_col_idx = _excel_col_to_index(args.xlsx_source_col)
+    tgt_col_idx = _excel_col_to_index(args.xlsx_target_col)
     for row in ws.iter_rows():
-        if len(row) > args.translate_col:
-            c = row[args.translate_col]
+        if len(row) > src_col_idx:
+            c = row[src_col_idx]
             if c.value and isinstance(c.value, str) and determine_if_translatable(c.value):
-                tgt = ws.cell(row=c.row, column=args.output_col + 1)
-                entries.append({'text': c.value, 'callback': lambda t, cell=tgt: setattr(cell, 'value', t)})
-    
-    if args.max_entries and len(entries) > args.max_entries:
-        log_msg(f"⏭️ SKIP: File '{os.path.basename(fpath)}' ha troppe entry ({len(entries)} > {args.max_entries})", style="yellow")
-        return
-
-    translate_batch(entries, args, stop_event)
-    wb.save(outpath)
-
-def process_xlsx(fpath, outpath, args, stop_event):
-    if not openpyxl: return
-    if args.resume and os.path.exists(outpath): return
-    wb = openpyxl.load_workbook(fpath)
-    ws = wb.active
-    entries = []
-    for row in ws.iter_rows():
-        if len(row) > args.translate_col:
-            c = row[args.translate_col]
-            if c.value and isinstance(c.value, str) and determine_if_translatable(c.value):
-                tgt = ws.cell(row=c.row, column=args.output_col + 1)
+                tgt = ws.cell(row=c.row, column=tgt_col_idx + 1)
                 entries.append({'text': c.value, 'callback': lambda t, cell=tgt: setattr(cell, 'value', t)})
     
     if args.max_entries and len(entries) > args.max_entries:
@@ -1040,6 +1034,8 @@ def get_cli_args():
     p.add_argument("--output-col", type=int, default=3)
     p.add_argument("--max-cols", type=int)
     p.add_argument("--json-keys")
+    p.add_argument("--xlsx-source-col", default="A")
+    p.add_argument("--xlsx-target-col", default="B")
     p.add_argument("--match-full-json-path", action="store_true")
     p.add_argument("--game-name", default="un videogioco generico")
     p.add_argument("--source-lang", default="inglese")
@@ -1047,6 +1043,7 @@ def get_cli_args():
     p.add_argument("--prompt-context")
     p.add_argument("--custom-prompt")
     p.add_argument("--translation-only-output", action="store_true")
+    p.add_argument("--style-guide")
     p.add_argument("--rpm", type=int)
     p.add_argument("--enable-file-context", action="store_true")
     p.add_argument("--full-context-sample", action="store_true")

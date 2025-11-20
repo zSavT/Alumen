@@ -1,8 +1,10 @@
 google-generativeai
+openpyxl
+packaging
+polib
+python-Levenshtein
 python-telegram-bot
 requests
-packaging
 rich
-polib
 tenacity
-argparse-color-formatter
+thefuzz
