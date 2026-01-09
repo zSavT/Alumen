@@ -1,10 +1,10 @@
 google-generativeai
-openpyxl
-packaging
-polib
-python-Levenshtein
-python-telegram-bot
-requests
+python-telegram-bot[job-queue]
 rich
 tenacity
-thefuzz
+packaging
+openpyxl
+polib
+requests
+argparse-color-formatter
+ollama

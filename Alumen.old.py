@@ -16,56 +16,34 @@ import textwrap
 from datetime import datetime
 from argparse_color_formatter import ColorHelpFormatter
 import json
+import polib
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 import logging
 from collections import deque
-import types # Aggiunto per SimpleNamespace
-
-# Import opzionali per formati extra
-try:
-    import openpyxl
-except ImportError:
-    openpyxl = None
-
-try:
-    import polib
-except ImportError:
-    polib = None
 
 import telegram_bot
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn, \
-    ProgressColumn, Task
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn, ProgressColumn, Task
 from rich.table import Table
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
-from rich.box import ROUNDED
+
 
 console = Console()
+
 
 # ----- Costanti Globali -----
 MAX_RETRIES_PER_API_CALL = 3
 MAX_MAJOR_FAILURES_THRESHOLD = 6
 DEFAULT_MODEL_NAME = "gemini-2.5-flash"
-DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 LOG_FILE_NAME = "log.txt"
 CACHE_FILE_NAME = "alumen_cache.json"
-DEFAULT_CACHE_FILE = CACHE_FILE_NAME # Alias per compatibilità GUI
 BASE_API_CALL_INTERVAL_SECONDS = 0.2
 FILE_CONTEXT_SAMPLE_SIZE = 15
-CURRENT_SCRIPT_VERSION = "2.5.0"
+CURRENT_SCRIPT_VERSION = "1.6"
 GITHUB_REPO = "zSavT/Alumen"
-ESTIMATED_CHARS_PER_TOKEN = 3.5
-
-# Prezzi indicativi per 1 Milione di Token (Input / Output) - Aggiornati a listino standard
-PRICING_TABLE = {
-    "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
-    "gemini-1.5-pro":   {"input": 3.50,  "output": 10.50},
-    "gemini-1.0-pro":   {"input": 0.50,  "output": 1.50},
-    "gemini-2.0-flash": {"input": 0.10,  "output": 0.40}, # Stima basata su 1.5 Flash (spesso simile o poco più)
-}
 
 # ----- Variabili Globali -----
 available_api_keys = []
@@ -76,7 +54,6 @@ script_args = None
 log_file_path = None
 translation_cache = {}
 BLACKLIST_TERMS = set(["Dummy", "dummy"])
-glossary_terms = {}  # Dizionario per il glossario
 blacklisted_api_key_indices = set()
 api_call_counts = {}
 cache_hit_count = 0
@@ -90,21 +67,17 @@ rpm_lock = Lock()
 total_input_tokens = 0
 total_output_tokens = 0
 
-# ----- Variabili per la Modalità Interattiva e GUI -----
+# ----- Variabili per la Modalità Interattiva -----
 user_command_skip_api = False
 user_command_skip_file = False
 script_is_paused = Event()
 command_lock = Lock()
 graceful_exit_requested = Event()
-global_skip_event = None # Evento Skip dalla GUI
 current_file_context = None
 current_file_total_entries = 0
 current_file_processed_entries = 0
 last_translation_prompt = None
 max_entries_limit = 999999999999
-
-# Code per integrazione GUI
-gui_log_queue = None
 
 ALUMEN_ASCII_ART = """
 
@@ -130,47 +103,17 @@ TRANSIENT_API_EXCEPTIONS = (
     google.api_core.exceptions.Unknown
 )
 
-# --- Eccezioni Custom per Controllo Flusso ---
-class StopProcessingException(Exception): pass
-class SkipFileException(Exception): pass
-
-def check_signals():
-    """Controlla eventi di Stop e Skip (GUI e CLI)."""
-    global user_command_skip_file
-    
-    # 1. Stop Globale
-    if graceful_exit_requested.is_set():
-        raise StopProcessingException("Stop richiesto dall'utente.")
-
-    # 2. Skip da GUI
-    if global_skip_event and global_skip_event.is_set():
-        global_skip_event.clear()
-        raise SkipFileException("Skip file richiesto da GUI.")
-
-    # 3. Skip da CLI/Legacy
-    if command_lock.acquire(blocking=False):
-        try:
-            if user_command_skip_file:
-                user_command_skip_file = False
-                raise SkipFileException("Skip file richiesto da CLI.")
-        finally:
-            command_lock.release()
-
 def retry_if_flag_is_not_set(retry_state):
     is_transient_error = isinstance(retry_state.outcome.exception(), TRANSIENT_API_EXCEPTIONS)
     should_retry = is_transient_error and not script_args.rotate_on_limit_or_error
     return should_retry
 
-
 def log_before_retry(retry_state):
     active_key_display = available_api_keys[current_api_key_index][-4:]
     error_message = str(retry_state.outcome.exception())
-    console.print(
-        f"    ⚠️  Tentativo {retry_state.attempt_number} (Chiave ...{active_key_display}) fallito. Errore: {error_message}")
+    console.print(f"    ⚠️  Tentativo {retry_state.attempt_number} (Chiave ...{active_key_display}) fallito. Errore: {error_message}")
     console.print(f"    ⏳ Riprovo tra {retry_state.next_action.sleep:.2f} secondi...")
-    write_to_log(
-        f"ERRORE API (Retry {retry_state.attempt_number}): Key ...{active_key_display}. Errore: {error_message}")
-
+    write_to_log(f"ERRORE API (Retry {retry_state.attempt_number}): Key ...{active_key_display}. Errore: {error_message}")
 
 def check_internet_connection():
     """Verifica se è presente una connessione internet attiva."""
@@ -180,10 +123,8 @@ def check_internet_connection():
     except OSError:
         return False
 
-
 class SmartTimeRemainingColumn(ProgressColumn):
     """Renders estimated time remaining considering cached entries."""
-
     def __init__(self, is_cached_list, rpm_limit=None):
         super().__init__()
         self.is_cached_list = is_cached_list
@@ -196,18 +137,17 @@ class SmartTimeRemainingColumn(ProgressColumn):
         completed = int(task.completed)
         total = int(task.total)
         if completed >= total: return Text("0:00:00", style="progress.remaining")
-
+        
         remaining_slice = self.is_cached_list[completed:]
         cached_remaining = sum(remaining_slice)
         api_remaining = len(remaining_slice) - cached_remaining
-
+        
         estimated_seconds = (api_remaining * self.avg_api_time) + (cached_remaining * 0.01)
-
+        
         if estimated_seconds <= 0: return Text("0:00:00", style="progress.remaining")
         m, s = divmod(int(estimated_seconds), 60)
         h, m = divmod(m, 60)
         return Text(f"{h}:{m:02d}:{s:02d}", style="progress.remaining")
-
 
 def get_script_args_updated():
     global script_args
@@ -219,98 +159,54 @@ def get_script_args_updated():
     file_format_group = parser.add_argument_group('Configurazione File e Formato')
     csv_options_group = parser.add_argument_group('Opzioni Specifiche per CSV')
     json_options_group = parser.add_argument_group('Opzioni Specifiche per JSON')
-    xlsx_options_group = parser.add_argument_group('Opzioni Specifiche per Excel')
     translation_group = parser.add_argument_group('Parametri di Traduzione')
     wrapping_group = parser.add_argument_group('Opzioni A Capo Automatico (Word Wrapping)')
     utility_group = parser.add_argument_group('Utilità e Modalità Interattiva')
     ollama_group = parser.add_argument_group('Opzioni Sperimentali per Ollama')
-    
     api_group.add_argument("--api", type=str, help="Specifica una o più chiavi API Google Gemini, separate da virgola.")
-    api_group.add_argument("--model-name", type=str, default=DEFAULT_MODEL_NAME,
-                           help=f"Nome del modello Gemini da utilizzare. Default: '{DEFAULT_MODEL_NAME}'")
-    file_format_group.add_argument("--input", type=str, default="input",
-                                   help="Percorso della cartella base contenente i file da tradurre. Default: 'input'")
-    file_format_group.add_argument("--file-type", type=str, default="csv", choices=['csv', 'json', 'po', 'xlsx', 'srt'],
-                                   help="Tipo di file da elaborare: 'csv', 'json', 'po', 'xlsx', 'srt'. Default: 'csv'")
-    file_format_group.add_argument("--encoding", type=str, default="utf-8",
-                                   help="Codifica caratteri dei file. Default: 'utf-8'")
-    
-    csv_options_group.add_argument("--delimiter", type=str, default=",",
-                                   help="[Solo CSV] Carattere delimitatore. Default: ','")
-    csv_options_group.add_argument("--translate-col", type=int, default=3,
-                                   help="[Solo CSV] Indice (0-based) della colonna da tradurre. Default: 3")
-    csv_options_group.add_argument("--output-col", type=int, default=3,
-                                   help="[Solo CSV] Indice (0-based) della colonna per il testo tradotto. Default: 3")
-    csv_options_group.add_argument("--max-cols", type=int, default=None,
-                                   help="[Solo CSV] Numero massimo di colonne attese per riga. Default: Nessun controllo.")
-    
-    json_options_group.add_argument("--json-keys", type=str, default=None,
-                                    help="[Solo JSON, Obbligatorio] Elenco di chiavi (separate da virgola) da tradurre. Supporta notazione a punto per chiavi annidate (es. 'key1,path.to.key2').")
-    json_options_group.add_argument("--match-full-json-path", action="store_true",
-                                    help="[Solo JSON] Per le chiavi JSON, richiede la corrispondenza del percorso completo della chiave (es. 'parent.child.key'), invece del solo nome della chiave.")
-    
-    xlsx_options_group.add_argument("--xlsx-source-col", type=str, default="A", help="[Solo XLSX] Lettera colonna origine (es. A).")
-    xlsx_options_group.add_argument("--xlsx-target-col", type=str, default="B", help="[Solo XLSX] Lettera colonna destinazione (es. B).")
-
-    translation_group.add_argument("--game-name", type=str, default="un videogioco generico",
-                                   help="Nome del gioco per contestualizzare la traduzione.")
+    api_group.add_argument("--model-name", type=str, default=DEFAULT_MODEL_NAME, help=f"Nome del modello Gemini da utilizzare. Default: '{DEFAULT_MODEL_NAME}'")
+    file_format_group.add_argument("--input", type=str, default="input", help="Percorso della cartella base contenente i file da tradurre. Default: 'input'")
+    file_format_group.add_argument("--file-type", type=str, default="csv", choices=['csv', 'json', 'po'], help="Tipo di file da elaborare: 'csv', 'json' o 'po'. Default: 'csv'")
+    file_format_group.add_argument("--encoding", type=str, default="utf-8", help="Codifica caratteri dei file. Default: 'utf-8'")
+    csv_options_group.add_argument("--delimiter", type=str, default=",", help="[Solo CSV] Carattere delimitatore. Default: ','")
+    csv_options_group.add_argument("--translate-col", type=int, default=3, help="[Solo CSV] Indice (0-based) della colonna da tradurre. Default: 3")
+    csv_options_group.add_argument("--output-col", type=int, default=3, help="[Solo CSV] Indice (0-based) della colonna per il testo tradotto. Default: 3")
+    csv_options_group.add_argument("--max-cols", type=int, default=None, help="[Solo CSV] Numero massimo di colonne attese per riga. Default: Nessun controllo.")
+    json_options_group.add_argument("--json-keys", type=str, default=None, help="[Solo JSON, Obbligatorio] Elenco di chiavi (separate da virgola) da tradurre. Supporta notazione a punto per chiavi annidate (es. 'key1,path.to.key2').")
+    json_options_group.add_argument("--match-full-json-path", action="store_true", help="[Solo JSON] Per le chiavi JSON, richiede la corrispondenza del percorso completo della chiave (es. 'parent.child.key'), invece del solo nome della chiave.")
+    translation_group.add_argument("--game-name", type=str, default="un videogioco generico", help="Nome del gioco per contestualizzare la traduzione.")
     translation_group.add_argument("--source-lang", type=str, default="inglese", help="Lingua originale del testo.")
     translation_group.add_argument("--target-lang", type=str, default="italiano", help="Lingua di destinazione.")
-    translation_group.add_argument("--prompt-context", type=str, default=None,
-                                   help="Aggiunge un'informazione contestuale extra al prompt.")
-    translation_group.add_argument("--custom-prompt", type=str, default=None,
-                                   help="Usa un prompt personalizzato. OBBLIGATORIO: includere '{text_to_translate}'.")
-    translation_group.add_argument("--glossary", type=str, default=None, help="Percorso del file CSV del glossario (Originale,Traduzione).")
-    translation_group.add_argument("--translation-only-output", action="store_true",
-                                   help="L'output conterrà solo i testi tradotti, uno per riga.")
-    translation_group.add_argument("--rpm", type=int, default=None,
-                                   help="Numero massimo di richieste API a Gemini per minuto.")
-    translation_group.add_argument("--enable-file-context", action="store_true",
-                                   help="Abilita l'analisi di un campione del file per generare un contesto generale da usare in tutte le traduzioni del file.")
-    translation_group.add_argument("--full-context-sample", action="store_true",
-                                   help="[Necessita --enable-file-context] Utilizza TUTTE le frasi valide nel file per generare il contesto generale.")
-    translation_group.add_argument("--reflect", action="store_true", help="Attiva Agentic Reflection (Traduzione + Critica). Raddoppia i costi.")
-    translation_group.add_argument("--dry-run", action="store_true", help="Esegue una simulazione calcolando token e costi senza tradurre.")
-    translation_group.add_argument("--fuzzy-match", action="store_true", help="Usa la cache anche per match parziali (sperimentale).")
-
-    translation_group.add_argument("--context-window", type=int, default=0,
-                                   help="Dimensione (N) della 'finestra di contesto dinamica'. Aggiunge le ultime N traduzioni (coppie sorgente->destinazione) al prompt. Default: 0 (disabilitato). Riduce l'efficacia della cache.")
-
-    wrapping_group.add_argument("--wrap-at", type=int, default=None,
-                                help="Lunghezza massima della riga per a capo automatico.")
-    wrapping_group.add_argument("--newline-char", type=str, default='\\n',
-                                help="Carattere da usare per l'a capo automatico.")
-    utility_group.add_argument("--enable-file-log", action="store_true",
-                               help=f"Attiva la scrittura di un log ('{LOG_FILE_NAME}').")
+    translation_group.add_argument("--prompt-context", type=str, default=None, help="Aggiunge un'informazione contestuale extra al prompt.")
+    translation_group.add_argument("--custom-prompt", type=str, default=None, help="Usa un prompt personalizzato. OBBLIGATORIO: includere '{text_to_translate}'.")
+    translation_group.add_argument("--translation-only-output", action="store_true", help="L'output conterrà solo i testi tradotti, uno per riga.")
+    translation_group.add_argument("--rpm", type=int, default=None, help="Numero massimo di richieste API a Gemini per minuto.")
+    translation_group.add_argument("--enable-file-context", action="store_true", help="Abilita l'analisi di un campione del file per generare un contesto generale da usare in tutte le traduzioni del file.")
+    translation_group.add_argument("--full-context-sample", action="store_true", help="[Necessita --enable-file-context] Utilizza TUTTE le frasi valide nel file per generare il contesto generale.")
+    
+    # --- MODIFICA: Aggiunta del flag --context-window ---
+    translation_group.add_argument("--context-window", type=int, default=0, help="Dimensione (N) della 'finestra di contesto dinamica'. Aggiunge le ultime N traduzioni (coppie sorgente->destinazione) al prompt. Default: 0 (disabilitato). Riduce l'efficacia della cache.")
+    
+    wrapping_group.add_argument("--wrap-at", type=int, default=None, help="Lunghezza massima della riga per a capo automatico.")
+    wrapping_group.add_argument("--newline-char", type=str, default='\\n', help="Carattere da usare per l'a capo automatico.")
+    utility_group.add_argument("--enable-file-log", action="store_true", help=f"Attiva la scrittura di un log ('{LOG_FILE_NAME}').")
     utility_group.add_argument("--interactive", action="store_true", help="Abilita comandi interattivi.")
-    utility_group.add_argument("--resume", action="store_true",
-                               help="Tenta di riprendere la traduzione da file parziali.")
-    utility_group.add_argument("--rotate-on-limit-or-error", action="store_true",
-                               help="Passa alla API key successiva in caso di errore o limite RPM.")
-    utility_group.add_argument("--persistent-cache", action="store_true",
-                               help=f"Attiva la cache persistente su file ('{CACHE_FILE_NAME}').")
-    utility_group.add_argument("--telegram", action="store_true",
-                               help="Abilita il logging e i comandi tramite un bot Telegram.")
-    utility_group.add_argument("--telegram-token", type=str, default=None, help="Token Bot Telegram (override config).")
-    utility_group.add_argument("--telegram-chat-id", type=str, default=None, help="Chat ID Telegram (override config).")
-    utility_group.add_argument("--server", action="store_true",
-                               help="Modalità server: non blacklista mai le API key per errori o limiti giornalieri, ma riprova all'infinito sulla stessa chiave.")
-    utility_group.add_argument("--shutdown", action="store_true",
-                               help="Spegne il computer al termine dell'esecuzione (se non interrotta manualmente).")
-    ollama_group.add_argument("--ollama-model", type=str, default=None,
-                              help="[SPERIMENTALE] Specifica un modello Ollama da usare al posto di Gemini. Disabilita le API key e le relative opzioni.")
-    ollama_group.add_argument("--ollama-url", type=str, default="http://localhost:11434",
-                              help="[SPERIMENTALE] URL del server Ollama. Default: 'http://localhost:11434'")
+    utility_group.add_argument("--resume", action="store_true", help="Tenta di riprendere la traduzione da file parziali.")
+    utility_group.add_argument("--rotate-on-limit-or-error", action="store_true", help="Passa alla API key successiva in caso di errore o limite RPM.")
+    utility_group.add_argument("--persistent-cache", action="store_true", help=f"Attiva la cache persistente su file ('{CACHE_FILE_NAME}').")
+    utility_group.add_argument("--telegram", action="store_true", help="Abilita il logging e i comandi tramite un bot Telegram.")
+    utility_group.add_argument("--server", action="store_true", help="Modalità server: non blacklista mai le API key per errori o limiti giornalieri, ma riprova all'infinito sulla stessa chiave.")
+    utility_group.add_argument("--shutdown", action="store_true", help="Spegne il computer al termine dell'esecuzione (se non interrotta manualmente).")
+    ollama_group.add_argument("--ollama-model", type=str, default=None, help="[SPERIMENTALE] Specifica un modello Ollama da usare al posto di Gemini. Disabilita le API key e le relative opzioni.")
+    ollama_group.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="[SPERIMENTALE] URL del server Ollama. Default: 'http://localhost:11434'")
+
 
     parsed_args = parser.parse_args()
     if parsed_args.delimiter == '\\t': parsed_args.delimiter = '\t'
-    if parsed_args.newline_char == '\\n':
-        parsed_args.newline_char = '\n'
-    elif parsed_args.newline_char == '\\r\\n':
-        parsed_args.newline_char = '\r\n'
+    if parsed_args.newline_char == '\\n': parsed_args.newline_char = '\n'
+    elif parsed_args.newline_char == '\\r\\n': parsed_args.newline_char = '\r\n'
     script_args = parsed_args
     return parsed_args
-
 
 def format_time_delta(seconds):
     h = int(seconds // 3600)
@@ -318,21 +214,17 @@ def format_time_delta(seconds):
     s = int(seconds % 60)
     return f"{h}h {m}m {s}s"
 
-
 def setup_log_file():
     global log_file_path, script_args
     if not script_args.enable_file_log: return
     try:
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-        except NameError:
-            script_dir = os.getcwd()
+        try: script_dir = os.path.dirname(os.path.abspath(__file__))
+        except NameError: script_dir = os.getcwd()
         log_file_path = os.path.join(script_dir, LOG_FILE_NAME)
         with open(log_file_path, 'a', encoding='utf-8') as f:
             f.write(ALUMEN_ASCII_ART + "\n")
             f.write(f"--- Nuova Sessione di Log Avviata: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
-            config_to_log = {k: (v if k != 'api' or not v or len(v) < 15 else f"{v[:5]}...{v[-4:]}(nascosta)") for k, v
-                             in vars(script_args).items()}
+            config_to_log = {k: (v if k != 'api' or not v or len(v) < 15 else f"{v[:5]}...{v[-4:]}(nascosta)") for k, v in vars(script_args).items()}
             f.write(f"Configurazione Applicata: {config_to_log}\n")
             f.write("-" * 70 + "\n")
         console.print(f"ℹ️  Logging su file abilitato. I log verranno salvati in: '{log_file_path}'")
@@ -340,75 +232,42 @@ def setup_log_file():
         console.print(f"⚠️  Attenzione: Impossibile inizializzare il file di log '{LOG_FILE_NAME}': {e}")
         log_file_path = None
 
-
 def write_to_log(message):
-    global script_args, log_file_path, gui_log_queue
-    
-    # Scrittura su file
+    global script_args, log_file_path
     if script_args and script_args.enable_file_log and log_file_path:
         try:
             with open(log_file_path, 'a', encoding='utf-8') as f:
                 f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
-        except Exception:
-            pass
-            
-    # Invio alla GUI se connessa
-    if gui_log_queue:
-        try:
-            gui_log_queue.put(f"{datetime.now().strftime('%H:%M:%S')} - {message}")
-        except: pass
-
+        except Exception: pass
 
 def log_critical_error_and_exit(message):
     console.print(f"🛑 [bold red]ERRORE CRITICO:[/] {message}")
     write_to_log(f"ERRORE CRITICO: {message}")
     if script_args and script_args.telegram:
-        telegram_bot.send_telegram_notification(
-            f"🛑 *ERRORE CRITICO:* Lo script si è interrotto.\n\n_Motivo:_ {message}")
-    
-    # Se siamo in GUI mode, non usciamo brutalmente ma segnaliamo l'errore
-    if gui_log_queue:
-        return
-        
+        telegram_bot.send_telegram_notification(f"🛑 *ERRORE CRITICO:* Lo script si è interrotto.\n\n_Motivo:_ {message}")
     sys.exit(1)
-
 
 def initialize_api_keys_and_model():
     global available_api_keys, current_api_key_index, model, rpm_limit, api_call_counts
     console.print("\n--- Inizializzazione API e Modello ---", style="bold cyan")
 
     if script_args.ollama_model:
-        console.print(
-            f"✅ Modalità Ollama attiva. Modello: '[bold]{script_args.ollama_model}[/]' su URL: {script_args.ollama_url}")
+        console.print(f"✅ Modalità Ollama attiva. Modello: '[bold]{script_args.ollama_model}[/]' su URL: {script_args.ollama_url}")
         console.print("---" * 20, style="cyan")
         return
-    
-    # Reset lista chiavi per evitare duplicati in caso di riavvio dalla GUI
-    available_api_keys = []
-    
     if script_args.api:
         keys_from_arg = [key.strip() for key in script_args.api.split(',') if key.strip()]
         if keys_from_arg:
             available_api_keys.extend(keys_from_arg)
             console.print(f"✅ Trovate {len(keys_from_arg)} API key dall'argomento --api.")
-    
-    # Se passato dalla GUI tramite file
-    if hasattr(script_args, 'api_file') and script_args.api_file and os.path.exists(script_args.api_file):
-         with open(script_args.api_file, "r") as f:
-            keys_from_file = [line.strip() for line in f if line.strip()]
-            if keys_from_file:
-                available_api_keys.extend(keys_from_file)
-                console.print(f"✅ Caricate {len(keys_from_file)} API key dal file '{script_args.api_file}'.")
-    
-    # Fallback standard
     api_key_file_path = "api_key.txt"
-    if os.path.exists(api_key_file_path) and not available_api_keys:
+    if os.path.exists(api_key_file_path):
         with open(api_key_file_path, "r") as f:
             keys_from_file = [line.strip() for line in f if line.strip()]
             if keys_from_file:
                 available_api_keys.extend(keys_from_file)
                 console.print(f"✅ Caricate {len(keys_from_file)} API key dal file '{api_key_file_path}'.")
-
+    
     # Supporto per caricamento da Variabile d'Ambiente
     env_keys = os.getenv("GEMINI_API_KEY")
     if env_keys:
@@ -421,8 +280,6 @@ def initialize_api_keys_and_model():
     available_api_keys = [x for x in available_api_keys if not (x in seen or seen.add(x))]
     if not available_api_keys:
         log_critical_error_and_exit("Nessuna API key trovata. Specificare tramite --api o nel file 'api_key.txt'.")
-        return # Per GUI mode
-        
     api_call_counts = {i: 0 for i in range(len(available_api_keys))}
     console.print(f"ℹ️  Totale API keys uniche disponibili: {len(available_api_keys)}.")
     current_api_key_index = 0
@@ -430,8 +287,7 @@ def initialize_api_keys_and_model():
         current_key = available_api_keys[current_api_key_index]
         genai.configure(api_key=current_key)
         model = genai.GenerativeModel(script_args.model_name)
-        console.print(
-            f"✅ Modello '[bold]{script_args.model_name}[/]' pronto. API Key attiva: [green]...{current_key[-4:]}[/]")
+        console.print(f"✅ Modello '[bold]{script_args.model_name}[/]' pronto. API Key attiva: [green]...{current_key[-4:]}[/]")
     except Exception as e:
         log_critical_error_and_exit(f"Errore durante l'inizializzazione del modello '{script_args.model_name}': {e}")
     if script_args.rpm and script_args.rpm > 0:
@@ -439,40 +295,16 @@ def initialize_api_keys_and_model():
         console.print(f"ℹ️  Limite RPM impostato a {rpm_limit} richieste al minuto.")
     console.print("---" * 20, style="cyan")
 
-
-def load_glossary():
-    global glossary_terms
-    glossary_terms = {}
-    if not script_args.glossary: return
-    
-    if not os.path.exists(script_args.glossary):
-        console.print(f"⚠️  File glossario '{script_args.glossary}' non trovato.", style="yellow")
-        return
-
-    try:
-        with open(script_args.glossary, 'r', encoding='utf-8') as f:
-            reader = csv.reader(f)
-            for row in reader:
-                if len(row) >= 2:
-                    term_orig = row[0].strip()
-                    term_trans = row[1].strip()
-                    if term_orig and term_trans:
-                        glossary_terms[term_orig] = term_trans
-        console.print(f"📚 Glossario caricato: {len(glossary_terms)} termini.", style="green")
-    except Exception as e:
-        console.print(f"❌ Errore caricamento glossario: {e}", style="red")
-
-
 def add_api_key(new_key, is_telegram: bool = False):
     global available_api_keys, api_call_counts, blacklisted_api_key_indices
     new_key = new_key.strip()
-
+    
     if not new_key:
         msg = "🛑 ERRORE: La chiave API non può essere vuota."
         if is_telegram: return msg
         console.print(f"[red]{msg}[/]")
         return
-
+        
     if new_key in available_api_keys:
         msg = "ℹ️  Questa API key è già presente nella lista."
         if is_telegram: return msg
@@ -485,10 +317,9 @@ def add_api_key(new_key, is_telegram: bool = False):
     blacklisted_api_key_indices.discard(new_index)
     msg = f"✅ Nuova API Key ...{new_key[-4:]} aggiunta. Totale chiavi: {len(available_api_keys)}."
     write_to_log(f"COMANDO: Aggiunta nuova API Key ...{new_key[-4:]}")
-
+    
     if is_telegram: return msg
     console.print(f"[green]{msg}[/]")
-
 
 def list_api_keys(is_telegram: bool = False):
     if script_args.ollama_model:
@@ -512,7 +343,7 @@ def list_api_keys(is_telegram: bool = False):
         table.add_column("Chiave", style="green")
         table.add_column("Stato", justify="right")
         table.add_column("Chiamate", justify="right")
-
+        
         for i, key in enumerate(available_api_keys):
             key_suffix = f"...{key[-4:]}"
             status = Text("")
@@ -520,12 +351,11 @@ def list_api_keys(is_telegram: bool = False):
                 status = Text("ATTIVA", style="bold green")
             if i in blacklisted_api_key_indices:
                 status = Text("BLACKLISTED", style="bold red")
-
+            
             calls = api_call_counts.get(i, 0)
             table.add_row(str(i), key_suffix, status, str(calls))
-
+            
         console.print(table)
-
 
 def remove_api_key(index_str, is_telegram: bool = False):
     if script_args.ollama_model:
@@ -541,29 +371,27 @@ def remove_api_key(index_str, is_telegram: bool = False):
             if is_telegram: return msg
             console.print(f"[red]{msg}[/]")
             return
-
+            
         key_suffix = available_api_keys[index][-4:]
         del available_api_keys[index]
         if index in blacklisted_api_key_indices: blacklisted_api_key_indices.discard(index)
-
+        
         new_api_call_counts = {}
         new_blacklisted_indices = set()
         for old_index, count in api_call_counts.items():
-            if old_index < index:
-                new_api_call_counts[old_index] = count
+            if old_index < index: new_api_call_counts[old_index] = count
             elif old_index > index:
                 new_index = old_index - 1
                 new_api_call_counts[new_index] = count
                 if old_index in blacklisted_api_key_indices: new_blacklisted_indices.add(new_index)
         api_call_counts = new_api_call_counts
         blacklisted_api_key_indices = new_blacklisted_indices
-
+        
         if current_api_key_index == index:
             if not is_telegram:
                 console.print(f"[yellow]⚠️  La chiave rimossa era quella attiva. Rotazione necessaria.[/]")
             if available_api_keys:
-                current_api_key_index = index % len(available_api_keys) if index < len(available_api_keys) else len(
-                    available_api_keys) - 1
+                current_api_key_index = index % len(available_api_keys) if index < len(available_api_keys) else len(available_api_keys) - 1
                 rotate_api_key(reason_override="Chiave attiva rimossa")
             else:
                 log_critical_error_and_exit("Tutte le API key rimosse. Impossibile proseguire.")
@@ -584,7 +412,6 @@ def remove_api_key(index_str, is_telegram: bool = False):
         if is_telegram: return msg
         console.print(f"[red]{msg}[/]")
 
-
 def blacklist_current_api_key(is_telegram: bool = False):
     if script_args.ollama_model:
         msg = "ℹ️  La gestione delle API key è disabilitata in modalità Ollama."
@@ -592,7 +419,7 @@ def blacklist_current_api_key(is_telegram: bool = False):
         console.print(f"[yellow]{msg}[/]")
         return
     global current_api_key_index, blacklisted_api_key_indices
-
+    
     if current_api_key_index in blacklisted_api_key_indices:
         msg = f"ℹ️  L'API Key ...{available_api_keys[current_api_key_index][-4:]} è già in blacklist."
         if is_telegram: return msg
@@ -606,20 +433,20 @@ def blacklist_current_api_key(is_telegram: bool = False):
     blacklisted_api_key_indices.add(current_api_key_index)
     key_suffix = available_api_keys[current_api_key_index][-4:]
     msg = f"✅ API Key ...{key_suffix} aggiunta alla blacklist."
-
+    
     # Se non è una chiamata da telegram, è un errore API, non un "COMANDO"
     if not is_telegram:
         write_to_log(f"BLACKLIST: {msg} (Quota esaurita o chiave non valida)")
     else:
         write_to_log(f"COMANDO: {msg}")
-
+    
     # --- MODIFICA INIZIO ---
     # Chiamiamo la rotazione e salviamo il risultato
     # 'triggered_by_user' è corretto, indica che la rotazione è forzata
     reason = "Key blacklisted da comando" if is_telegram else "Key esaurita/invalida"
     rotation_success = rotate_api_key(triggered_by_user=True, reason_override=reason)
     # --- MODIFICA FINE ---
-
+    
     if is_telegram: return msg
     console.print(f"[green]{msg}[/]")
 
@@ -628,13 +455,10 @@ def blacklist_current_api_key(is_telegram: bool = False):
     return rotation_success
     # --- MODIFICA FINE ---
 
-
 def blacklist_specific_api_key(index_str, is_telegram: bool = False):
     # Questa funzione non era stata implementata, la aggiungo per completezza
     # e per gestire il comando 'blacklist <indice>'
-    console.print(
-        f"[yellow]⚠️  Funzione 'blacklist <indice>' non ancora implementata. Usa 'exhausted' per la chiave corrente.[/]")
-
+    console.print(f"[yellow]⚠️  Funzione 'blacklist <indice>' non ancora implementata. Usa 'exhausted' per la chiave corrente.[/]")
 
 def clear_blacklisted_keys(is_telegram: bool = False):
     global blacklisted_api_key_indices
@@ -649,7 +473,6 @@ def clear_blacklisted_keys(is_telegram: bool = False):
     write_to_log(f"COMANDO: {msg}")
     if is_telegram: return msg
     console.print(f"[green]{msg}[/]")
-
 
 def set_rpm_limit_func(rpm_str, is_telegram: bool = False):
     if script_args.ollama_model:
@@ -670,7 +493,7 @@ def set_rpm_limit_func(rpm_str, is_telegram: bool = False):
             with rpm_lock:
                 rpm_request_timestamps.clear()
             msg = f"✅ Nuovo limite RPM impostato a {new_rpm}."
-
+        
         write_to_log(f"COMANDO: {msg.strip()}")
         if is_telegram: return msg
         console.print(f"[green]{msg}[/]")
@@ -678,7 +501,6 @@ def set_rpm_limit_func(rpm_str, is_telegram: bool = False):
         msg = "🛑 ERRORE: Il limite RPM deve essere un numero intero."
         if is_telegram: return msg
         console.print(f"[red]{msg}[/]")
-
 
 def show_rpm_stats(title="Statistiche RPM", is_telegram: bool = False):
     global rpm_limit, rpm_request_timestamps
@@ -718,7 +540,6 @@ def show_rpm_stats(title="Statistiche RPM", is_telegram: bool = False):
                 table.add_row("Attesa necessaria", f"{max(0.0, wait_duration):.2f} secondi")
         console.print(table)
 
-
 def set_model_name(model_name, is_telegram: bool = False):
     global model, script_args
     if script_args.ollama_model:
@@ -743,7 +564,6 @@ def set_model_name(model_name, is_telegram: bool = False):
         msg = f"🛑 ERRORE: Impossibile impostare il modello '{model_name}'. Errore: {e}"
         if is_telegram: return msg
         console.print(f"[red]{msg}[/]")
-
 
 def show_file_progress(is_telegram: bool = False):
     if current_file_total_entries == 0:
@@ -774,7 +594,6 @@ def show_file_progress(is_telegram: bool = False):
             table.add_row("Contesto", f"'{current_file_context[:60].strip()}...'")
         console.print(table)
 
-
 def reload_persistent_cache(is_telegram: bool = False):
     if not script_args.persistent_cache:
         msg = "⚠️  La cache persistente è disabilitata. Usa --persistent-cache."
@@ -794,7 +613,6 @@ def reload_persistent_cache(is_telegram: bool = False):
         if is_telegram: return msg
         console.print(f"[red]{msg}[/]")
 
-
 def clear_translation_cache_func(is_telegram: bool = False):
     global translation_cache
     count = len(translation_cache)
@@ -811,7 +629,6 @@ def clear_translation_cache_func(is_telegram: bool = False):
     if is_telegram: return msg
     console.print(f"[green]{msg}[/]")
 
-
 def display_colored_prompt(is_telegram: bool = False):
     if not last_translation_prompt:
         msg = "ℹ️  Nessun prompt di traduzione è stato ancora inviato."
@@ -826,18 +643,16 @@ def display_colored_prompt(is_telegram: bool = False):
         text.highlight_regex(r'\{[^{}]*\}', "bold yellow")
         console.print(Panel(text, title="Ultimo Prompt di Traduzione Inviato", border_style="cyan"))
 
-
 def rotate_api_key(triggered_by_user=False, reason_override=None):
     if script_args.ollama_model:
         console.print("ℹ️  La rotazione delle API key è disabilitata in modalità Ollama.", style="yellow")
-        return True  # Ritorna True per non bloccare il flusso, anche se non fa nulla.
+        return True # Ritorna True per non bloccare il flusso, anche se non fa nulla.
 
     global current_api_key_index, major_failure_count, model, blacklisted_api_key_indices
     usable_keys_count = len(available_api_keys) - len(blacklisted_api_key_indices)
 
     if usable_keys_count == 0:
-        console.print("🛑 ERRORE CRITICO: Tutte le API key sono state blacklisted. Impossibile proseguire.",
-                      style="bold red")
+        console.print("🛑 ERRORE CRITICO: Tutte le API key sono state blacklisted. Impossibile proseguire.", style="bold red")
         write_to_log("ERRORE CRITICO: Tutte le API key sono state blacklisted.")
         return False
     previous_key_index = current_api_key_index
@@ -852,9 +667,8 @@ def rotate_api_key(triggered_by_user=False, reason_override=None):
                 current_api_key_index = previous_key_index
             return False
     new_api_key = available_api_keys[current_api_key_index]
-    trigger_reason = reason_override if reason_override else (
-        "Comando utente." if triggered_by_user else f"Soglia fallimenti raggiunta.")
-
+    trigger_reason = reason_override if reason_override else ("Comando utente." if triggered_by_user else f"Soglia fallimenti raggiunta.")
+    
     console.print(f"\nℹ️  Rotazione API Key in corso (Motivo: {trigger_reason})...")
     if script_args.telegram:
         telegram_bot.send_telegram_notification(f"🔄 *Rotazione API Key...*\n_Motivo:_ {trigger_reason}")
@@ -862,18 +676,16 @@ def rotate_api_key(triggered_by_user=False, reason_override=None):
     try:
         genai.configure(api_key=new_api_key)
         model = genai.GenerativeModel(script_args.model_name)
-
+        
         console.print(f"✅ Rotazione completata. Nuova API Key attiva: [green]...{new_api_key[-4:]}[/]")
         if script_args.telegram:
-            telegram_bot.send_telegram_notification(
-                f"✅ *Rotazione completata.*\n*Nuova API Key attiva:* `...{new_api_key[-4:]}`")
+            telegram_bot.send_telegram_notification(f"✅ *Rotazione completata.*\n*Nuova API Key attiva:* `...{new_api_key[-4:]}`")
         return True
     except Exception as e:
         console.print(f"❌ [red]ERRORE: Configurazione nuova API Key fallita: {e}[/]")
         if script_args.telegram:
-            telegram_bot.send_telegram_notification(
-                f"❌ *ERRORE:* Configurazione nuova API Key `...{new_api_key[-4:]}` fallita.")
-
+            telegram_bot.send_telegram_notification(f"❌ *ERRORE:* Configurazione nuova API Key `...{new_api_key[-4:]}` fallita.")
+        
         if previous_key_index not in blacklisted_api_key_indices:
             current_api_key_index = previous_key_index
             try:
@@ -883,10 +695,8 @@ def rotate_api_key(triggered_by_user=False, reason_override=None):
             except Exception as e_revert:
                 log_critical_error_and_exit(f"Errore nel ripristino della API Key precedente: {e_revert}.")
         else:
-            log_critical_error_and_exit(
-                "Fallita rotazione API e la chiave precedente è blacklisted. Nessuna chiave utilizzabile.")
+            log_critical_error_and_exit("Fallita rotazione API e la chiave precedente è blacklisted. Nessuna chiave utilizzabile.")
         return False
-
 
 def show_stats(title="📊 STATISTICHE DI ESECUZIONE", is_telegram: bool = False):
     end_time = time.time()
@@ -943,13 +753,12 @@ def show_stats(title="📊 STATISTICHE DI ESECUZIONE", is_telegram: bool = False
         if not script_args.ollama_model:
             list_api_keys()
 
-
 def process_command(command_line: str, is_telegram: bool = False):
     global user_command_skip_api, user_command_skip_file
     command_parts = command_line.split(maxsplit=1)
     command = command_parts[0].lower() if command_parts else ""
     output = ""
-
+    
     with command_lock:
         if command == "stop":
             graceful_exit_requested.set()
@@ -971,12 +780,9 @@ def process_command(command_line: str, is_telegram: bool = False):
                 output = "ℹ️  Nessun contesto generato per il file corrente."
         elif command == "skip":
             sub_command = command_parts[1].lower() if len(command_parts) > 1 else ""
-            if sub_command == "api":
-                user_command_skip_api = True; output = "➡️  Comando ricevuto: salto dell'API corrente in corso..."
-            elif sub_command == "file":
-                user_command_skip_file = True; output = "➡️  Comando ricevuto: salto del file corrente in corso..."
-            else:
-                output = "⚠️  Comando non valido. Usa 'skip api' o 'skip file'."
+            if sub_command == "api": user_command_skip_api = True; output = "➡️  Comando ricevuto: salto dell'API corrente in corso..."
+            elif sub_command == "file": user_command_skip_file = True; output = "➡️  Comando ricevuto: salto del file corrente in corso..."
+            else: output = "⚠️  Comando non valido. Usa 'skip api' o 'skip file'."
         elif command == "pause":
             script_is_paused.clear()
             output = "⏳ SCRIPT IN PAUSA. Invia 'resume' per continuare."
@@ -988,57 +794,41 @@ def process_command(command_line: str, is_telegram: bool = False):
             return show_stats("📊 STATISTICHE ATTUALI", is_telegram=is_telegram)
         elif command == "add":
             parts = command_parts[1].split(maxsplit=1) if len(command_parts) > 1 else []
-            if len(parts) == 2 and parts[0].lower() == 'api':
-                output = add_api_key(parts[1].strip(), is_telegram=is_telegram)
-            else:
-                output = "⚠️  Comando non valido. Usa 'add api <chiave>'."
-        elif command == "exhausted":
-            output = blacklist_current_api_key(is_telegram=is_telegram)
+            if len(parts) == 2 and parts[0].lower() == 'api': output = add_api_key(parts[1].strip(), is_telegram=is_telegram)
+            else: output = "⚠️  Comando non valido. Usa 'add api <chiave>'."
+        elif command == "exhausted": output = blacklist_current_api_key(is_telegram=is_telegram)
         elif command == "list" and len(command_parts) > 1 and command_parts[1].lower() == 'keys':
             return list_api_keys(is_telegram=is_telegram)
         elif command == "remove":
             parts = command_parts[1].split(maxsplit=1) if len(command_parts) > 1 else []
-            if len(parts) == 2 and parts[0].lower() == 'key':
-                output = remove_api_key(parts[1].strip(), is_telegram=is_telegram)
-            else:
-                output = "⚠️  Comando non valido. Usa 'remove key <indice>'."
+            if len(parts) == 2 and parts[0].lower() == 'key': output = remove_api_key(parts[1].strip(), is_telegram=is_telegram)
+            else: output = "⚠️  Comando non valido. Usa 'remove key <indice>'."
         elif command == "blacklist":
-            if len(command_parts) > 1:
-                output = blacklist_specific_api_key(command_parts[1].strip(), is_telegram=is_telegram)
-            else:
-                output = "⚠️  Comando non valido. Usa 'blacklist <indice>'."
+            if len(command_parts) > 1: output = blacklist_specific_api_key(command_parts[1].strip(), is_telegram=is_telegram)
+            else: output = "⚠️  Comando non valido. Usa 'blacklist <indice>'."
         elif command == "clear" and len(command_parts) > 1 and command_parts[1].lower() == 'blacklist':
             output = clear_blacklisted_keys(is_telegram=is_telegram)
         elif command == "set":
             parts = command_parts[1].split(maxsplit=1) if len(command_parts) > 1 else []
             if len(parts) == 2:
                 param, value = parts[0].lower(), parts[1].strip()
-                if param == 'rpm':
-                    output = set_rpm_limit_func(value, is_telegram=is_telegram)
-                elif param == 'model':
-                    output = set_model_name(value, is_telegram=is_telegram)
-                elif param == 'max_entries':
-                    output = set_max_entries_limit(value, is_telegram=is_telegram)
-                else:
-                    output = "⚠️  Comando non valido. Usa 'set <rpm|model|max_entries> <valore>'."
-            else:
-                output = "⚠️  Comando non valido. Usa 'set <param> <valore>'."
+                if param == 'rpm': output = set_rpm_limit_func(value, is_telegram=is_telegram)
+                elif param == 'model': output = set_model_name(value, is_telegram=is_telegram)
+                elif param == 'max_entries': output = set_max_entries_limit(value, is_telegram=is_telegram)
+                else: output = "⚠️  Comando non valido. Usa 'set <rpm|model|max_entries> <valore>'."
+            else: output = "⚠️  Comando non valido. Usa 'set <param> <valore>'."
         elif command == "show":
             sub_command = command_parts[1].lower() if len(command_parts) > 1 else ""
-            if sub_command == "rpm":
-                return show_rpm_stats(is_telegram=is_telegram)
-            elif sub_command == "file_progress":
-                return show_file_progress(is_telegram=is_telegram)
-            else:
-                output = "⚠️  Comando non valido. Usa 'show <rpm|file_progress>'."
+            if sub_command == "rpm": return show_rpm_stats(is_telegram=is_telegram)
+            elif sub_command == "file_progress": return show_file_progress(is_telegram=is_telegram)
+            else: output = "⚠️  Comando non valido. Usa 'show <rpm|file_progress>'."
         elif command == "reload" and len(command_parts) > 1 and command_parts[1].lower() == 'cache':
             output = reload_persistent_cache(is_telegram=is_telegram)
         elif command == "clear" and len(command_parts) > 1 and command_parts[1].lower() == 'cache':
             output = clear_translation_cache_func(is_telegram=is_telegram)
         elif command == "prompt":
             return display_colored_prompt(is_telegram=is_telegram)
-        elif command == "save" or (
-                command == "salva" and len(command_parts) > 1 and command_parts[1].lower() == "cache"):
+        elif command == "save" or (command == "salva" and len(command_parts) > 1 and command_parts[1].lower() == "cache"):
             if script_args.persistent_cache:
                 output = "➡️ Comando ricevuto: salvataggio della cache in corso..."
                 save_persistent_cache()
@@ -1081,7 +871,7 @@ def process_command(command_line: str, is_telegram: bool = False):
                     "clear cache": "Svuota la cache in memoria."
                 }
             }
-
+            
             if is_telegram:
                 lines = ["*🆘 AIUTO COMANDI ALUMEN*"]
                 for section, commands in help_sections.items():
@@ -1102,7 +892,6 @@ def process_command(command_line: str, is_telegram: bool = False):
         return output
     console.print(output)
 
-
 def command_input_thread_func():
     console.print(Rule("[bold]Alumen - Console Interattiva[/]"))
     console.print("ℹ️  Digita 'help' per i comandi, 'exit' o 'quit' per chiudere.")
@@ -1110,7 +899,7 @@ def command_input_thread_func():
         try:
             prompt_indicator = "[yellow](In Pausa)[/]" if not script_is_paused.is_set() else ""
             command_line = console.input(f"[bold magenta]Alumen >[/] {prompt_indicator}").strip()
-
+            
             if command_line.lower() in ["exit", "quit"]:
                 process_command(command_line)
                 break
@@ -1124,20 +913,11 @@ def command_input_thread_func():
             console.print(f"🛑 Errore nel thread input comandi: {e}")
             break
 
-
 def check_and_wait_if_paused(file_context=""):
     global script_is_paused
     if script_args.interactive and not script_is_paused.is_set():
-        msg_pause = f"⏳ SCRIPT IN PAUSA ({file_context}). In attesa di 'resume'..."
-        console.print(f"\n[yellow]{msg_pause}[/]")
-        write_to_log(msg_pause) # Aggiunto
-        
+        console.print(f"\n[yellow]▶️  SCRIPT RIPRESO (Lavorando su: {file_context}).[/]\n")
         script_is_paused.wait()
-        
-        msg_resume = "▶️  SCRIPT RIPRESO."
-        console.print(f"\n[green]{msg_resume}[/]")
-        write_to_log(msg_resume) # Aggiunto
-
 
 def wait_for_rpm_limit():
     global rpm_limit, rpm_request_timestamps
@@ -1151,86 +931,62 @@ def wait_for_rpm_limit():
                 rpm_request_timestamps.append(current_time)
                 break
             else:
-                if script_args.rotate_on_limit_or_error and rotate_api_key(
-                    reason_override="Limite RPM raggiunto"): break
+                if script_args.rotate_on_limit_or_error and rotate_api_key(reason_override="Limite RPM raggiunto"): break
                 wait_duration = (rpm_request_timestamps[0] + 60.0) - current_time
         if wait_duration > 0:
-            console.print(
-                f"    [yellow]⏳ Limite RPM ({rpm_limit}/min) raggiunto. Attesa di {wait_duration:.1f} secondi...[/]")
+            console.print(f"    [yellow]⏳ Limite RPM ({rpm_limit}/min) raggiunto. Attesa di {wait_duration:.1f} secondi...[/]")
             time.sleep(wait_duration)
-
 
 def determine_if_translatable(text_value):
     if not isinstance(text_value, str): return False
     text_value_stripped = text_value.strip()
-    if not text_value_stripped or text_value_stripped.isdigit() or re.match(r'^[\W_]+$',
-                                                                            text_value_stripped) or "\\u" in text_value_stripped:
+    if not text_value_stripped or text_value_stripped.isdigit() or re.match(r'^[\W_]+$', text_value_stripped) or "\\u" in text_value_stripped:
         return False
     if '_' in text_value_stripped and ' ' not in text_value_stripped:
         return False
     return True
 
-
 def load_persistent_cache(silent: bool = False):
     global translation_cache, script_args, last_cache_save_time
     if not script_args.persistent_cache: return
-    
-    # Se passato dalla GUI, usa il file specificato
-    cache_file = script_args.cache_file if hasattr(script_args, 'cache_file') and script_args.cache_file else CACHE_FILE_NAME
-    
     try:
-        if os.path.exists(cache_file):
-            with open(cache_file, 'r', encoding='utf-8') as f:
+        if os.path.exists(CACHE_FILE_NAME):
+            with open(CACHE_FILE_NAME, 'r', encoding='utf-8') as f:
                 translation_cache = json.load(f)
             if not silent:
-                console.print(
-                    f"✅ Cache persistente caricata da '[green]{cache_file}[/]' ({len(translation_cache)} voci).")
+                console.print(f"✅ Cache persistente caricata da '[green]{CACHE_FILE_NAME}[/]' ({len(translation_cache)} voci).")
             last_cache_save_time = time.time()
         else:
             if not silent:
-                console.print(
-                    f"ℹ️  File di cache '[yellow]{cache_file}[/]' non trovato. Verrà creato un nuovo file.")
+                console.print(f"ℹ️  File di cache '[yellow]{CACHE_FILE_NAME}[/]' non trovato. Verrà creato un nuovo file.")
             last_cache_save_time = 0.0
     except (json.JSONDecodeError, IOError) as e:
-        console.print(
-            f"⚠️  [yellow]Attenzione: Impossibile caricare la cache da '{cache_file}': {e}. Verrà ricreata.[/]")
+        console.print(f"⚠️  [yellow]Attenzione: Impossibile caricare la cache da '{CACHE_FILE_NAME}': {e}. Verrà ricreata.[/]")
         translation_cache = {}
         last_cache_save_time = 0.0
 
-
-def save_persistent_cache(force=False):
+def save_persistent_cache():
     global translation_cache, script_args, last_cache_save_time
     if not script_args.persistent_cache or not translation_cache:
-        if script_args.persistent_cache and not translation_cache and force:
+        if script_args.persistent_cache and not translation_cache:
             console.print("\nℹ️  Salvataggio cache ignorato: la cache è vuota.", style="yellow")
         return
-    
-    cache_file = script_args.cache_file if hasattr(script_args, 'cache_file') and script_args.cache_file else CACHE_FILE_NAME
-    
     try:
-        with open(cache_file, 'w', encoding='utf-8') as f:
+        with open(CACHE_FILE_NAME, 'w', encoding='utf-8') as f:
             json.dump(translation_cache, f, ensure_ascii=False, indent=4)
-        if force:
-            console.print(
-                f"\n✅ Cache ({len(translation_cache)} voci) salvata correttamente in '[green]{cache_file}[/]'.")
+        console.print(f"\n✅ Cache ({len(translation_cache)} voci) salvata correttamente in '[green]{CACHE_FILE_NAME}[/]'.")
         last_cache_save_time = time.time()
     except IOError as e:
-        console.print(f"\n[red]🛑 ERRORE: Impossibile salvare la cache in '{cache_file}': {e}[/]")
+        console.print(f"\n[red]🛑 ERRORE: Impossibile salvare la cache in '{CACHE_FILE_NAME}': {e}[/]")
 
-
-def check_and_save_cache(args=None, force=False):
+def check_and_save_cache():
     global last_cache_save_time, script_args
-    # Se args è passato (es. dalla GUI), aggiorna il riferimento globale
-    if args: script_args = args
-    
     if not script_args.persistent_cache: return
     current_time = time.time()
-    if force or (last_cache_save_time == 0.0 or current_time - last_cache_save_time >= 600):
-        if not force:
-            console.print("\nℹ️  Salvataggio periodico della cache in corso...")
-            write_to_log("Salvataggio cache periodico (10 minuti) attivato.")
-        save_persistent_cache(force=force)
-
+    if last_cache_save_time == 0.0 or current_time - last_cache_save_time >= 600:
+        console.print("\nℹ️  Salvataggio periodico della cache in corso...")
+        write_to_log("Salvataggio cache periodico (10 minuti) attivato.")
+        save_persistent_cache()
 
 @retry(
     stop=stop_after_attempt(MAX_RETRIES_PER_API_CALL),
@@ -1245,7 +1001,7 @@ def _perform_genai_api_call(prompt):
     wait_for_rpm_limit()
     time.sleep(BASE_API_CALL_INTERVAL_SECONDS)
     response_obj = model.generate_content(prompt)
-
+    
     if hasattr(response_obj, 'usage_metadata'):
         global total_input_tokens, total_output_tokens
         total_input_tokens += response_obj.usage_metadata.prompt_token_count
@@ -1254,7 +1010,6 @@ def _perform_genai_api_call(prompt):
     if not response_obj or not hasattr(response_obj, 'text'):
         raise ValueError("Risposta dall'API non valida o vuota.")
     return response_obj.text.strip()
-
 
 def _call_ollama_model(prompt_text):
     """Chiama un modello locale tramite l'API di Ollama."""
@@ -1265,26 +1020,23 @@ def _call_ollama_model(prompt_text):
         "stream": False  # Per semplicità, attendiamo la risposta completa
     }
     try:
-        response = requests.post(api_url, json=payload, timeout=120)  # Timeout di 2 minuti
+        response = requests.post(api_url, json=payload, timeout=120) # Timeout di 2 minuti
         response.raise_for_status()
         response_json = response.json()
-
+        
         global total_input_tokens, total_output_tokens
         if "prompt_eval_count" in response_json:
             total_input_tokens += response_json["prompt_eval_count"]
         if "eval_count" in response_json:
             total_output_tokens += response_json["eval_count"]
-
+            
         return response_json.get("response", "").strip()
     except requests.exceptions.ConnectionError as e:
-        console.print(
-            f"    🛑 ERRORE OLLAMA: Impossibile connettersi a '{script_args.ollama_url}'. Assicurati che Ollama sia in esecuzione.",
-            style="bold red")
+        console.print(f"    🛑 ERRORE OLLAMA: Impossibile connettersi a '{script_args.ollama_url}'. Assicurati che Ollama sia in esecuzione.", style="bold red")
         raise ConnectionError(f"Ollama connection failed: {e}") from e
     except Exception as e:
         console.print(f"    🛑 ERRORE OLLAMA: Errore durante la chiamata API: {e}", style="bold red")
         raise
-
 
 def generate_file_context(sample_text, file_name, args):
     global major_failure_count, model, translation_cache, cache_hit_count, api_call_counts
@@ -1294,133 +1046,112 @@ def generate_file_context(sample_text, file_name, args):
         console.print(f"  ✅ Contesto per '[bold]{file_name}[/]' trovato nella cache.")
         cache_hit_count += 1
         return translation_cache[context_cache_key]
-
+    
     console.print(f"  ➡️  Richiesta API per generare il contesto del file '[bold]{file_name}[/]'...")
     prompt = f"Analizza il seguente campione di testo, che proviene da un file di traduzione per il gioco '{args.game_name}'. Il tuo compito è determinare, in non più di due frasi concise, l'argomento principale, il contesto generale o l'ambientazione più probabile di questo file. Questo contesto verrà utilizzato per migliorare la qualità delle traduzioni successive. Rispondi solo con il contesto generato.\nCampione di testo:\n---\n{sample_text}\n---\nContesto generato:"
-
+    
     while True:
         if args.interactive: check_and_wait_if_paused(f"Generazione Contesto per File: {file_name}")
-
+        
         global user_command_skip_file
         if command_lock.acquire(blocking=False):
             try:
                 if user_command_skip_file: raise KeyboardInterrupt
             finally:
                 command_lock.release()
-
+        
         try:
             file_context = _perform_genai_api_call(prompt)
             if not args.ollama_model:
                 api_call_counts[current_api_key_index] += 1
-            if args.wrap_at and args.wrap_at > 0: file_context = textwrap.fill(file_context, width=args.wrap_at,
-                                                                               newline=args.newline_char,
-                                                                               replace_whitespace=False)
+            if args.wrap_at and args.wrap_at > 0: file_context = textwrap.fill(file_context, width=args.wrap_at, newline=args.newline_char, replace_whitespace=False)
             translation_cache[context_cache_key] = file_context
             console.print(f"  ✅ Contesto generato per il file: '[italic]{file_context}[/]'")
             write_to_log(f"Contesto generato per {file_name}: {file_context}")
             major_failure_count = 0
             return file_context
         except TRANSIENT_API_EXCEPTIONS as e:
-            if args.ollama_model:  # Ollama non ha questo tipo di errori, ma per sicurezza
-                console.print(f"    🛑 Errore non gestito durante la generazione del contesto con Ollama: {e}",
-                              style="red")
+            if args.ollama_model: # Ollama non ha questo tipo di errori, ma per sicurezza
+                console.print(f"    🛑 Errore non gestito durante la generazione del contesto con Ollama: {e}", style="red")
                 return None
             major_failure_count += 1
-            console.print(
-                f"    ❌ Fallimento definitivo generazione contesto con Chiave ...{available_api_keys[current_api_key_index][-4:]}. Fallimenti consecutivi: {major_failure_count}/{MAX_MAJOR_FAILURES_THRESHOLD}",
-                style="red")
+            console.print(f"    ❌ Fallimento definitivo generazione contesto con Chiave ...{available_api_keys[current_api_key_index][-4:]}. Fallimenti consecutivi: {major_failure_count}/{MAX_MAJOR_FAILURES_THRESHOLD}", style="red")
             if args.rotate_on_limit_or_error and rotate_api_key(reason_override="Errore API"):
                 continue
             elif major_failure_count >= MAX_MAJOR_FAILURES_THRESHOLD and rotate_api_key():
-                continue
+                 continue
             else:
-                console.print("    ⚠️  Rotazione API non attiva o fallita. Contesto file non generabile.",
-                              style="yellow")
+                console.print("    ⚠️  Rotazione API non attiva o fallita. Contesto file non generabile.", style="yellow")
                 return None
         except Exception as e:
-            if isinstance(e, ConnectionError):  # Errore specifico di connessione a Ollama
+            if isinstance(e, ConnectionError): # Errore specifico di connessione a Ollama
                 console.print(f"    ⚠️  Connessione a Ollama fallita. Contesto file non generabile.", style="yellow")
                 return None
             console.print(f"    🛑 Errore non gestito durante la generazione del contesto: {e}", style="red")
             return None
 
-
 def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_context=None):
-    global major_failure_count, user_command_skip_api, model, translation_cache, cache_hit_count, api_call_counts, BLACKLIST_TERMS, last_translation_prompt, glossary_terms
+    global major_failure_count, user_command_skip_api, model, translation_cache, cache_hit_count, api_call_counts, BLACKLIST_TERMS, last_translation_prompt
+
+    #if args.source_lang.lower() == "inglese" and not text_to_translate.isascii():
+    #    content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {text_to_translate}")
+    #    console.print(Panel(content, title=f"[bold yellow]⏭️  SKIP (Non-ASCII)[/] | {context_for_log}", border_style="yellow", title_align="left"))
+    #    write_to_log(f"SKIP (Non-ASCII): Rilevato testo non-ASCII con source_lang 'inglese'. Contesto: {context_for_log}")
+    #    return text_to_translate
 
     if text_to_translate.strip() in BLACKLIST_TERMS:
         return text_to_translate
+    
 
     if not determine_if_translatable(text_to_translate):
-        content = Text.from_markup(
-            f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {text_to_translate}")
-        console.print(Panel(content, title=f"[bold yellow]⏭️  SKIP (Non-Translatable)[/] | {context_for_log}",
-                            border_style="yellow", title_align="left"))
-        write_to_log(
-            f"SKIP (Non-Translatable): Testo non idoneo alla traduzione (es. ID, numero, solo simboli). Contesto: {context_for_log}")
+        content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {text_to_translate}")
+        console.print(Panel(content, title=f"[bold yellow]⏭️  SKIP (Non-Translatable)[/] | {context_for_log}", border_style="yellow", title_align="left"))
+        write_to_log(f"SKIP (Non-Translatable): Testo non idoneo alla traduzione (es. ID, numero, solo simboli). Contesto: {context_for_log}")
         return text_to_translate
-
-    # --- Logica Cache a Due Passi ---
+    
+    # --- MODIFICA INIZIO: Logica Cache a Due Passi (Retrocompatibile) ---
 
     # 1. Crea la chiave NUOVA (con contesto dinamico, se esiste)
-    context_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context,
-                         dynamic_context)
+    context_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context, dynamic_context)
     context_key = json.dumps(context_key_tuple, ensure_ascii=False)
-
+    
     # 2. Cerca la chiave NUOVA (specifica per il contesto)
     if context_key in translation_cache:
         cache_hit_count += 1
         translated_text = translation_cache[context_key]
         content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
-        console.print(
-            Panel(content, title=f"[bold green]💾 CACHE (Contesto)[/] | {context_for_log}", border_style="green",
-                  title_align="left"))
+        console.print(Panel(content, title=f"[bold green]💾 CACHE (Contesto)[/] | {context_for_log}", border_style="green", title_align="left"))
         return translated_text
 
     # 3. Se la chiave NUOVA fallisce E stiamo usando un contesto, cerca la chiave VECCHIA (generica)
+    #    (Se dynamic_context è None, context_key e generic_key sono identici, quindi questo blocco viene saltato correttamente)
     if dynamic_context:
         generic_key_tuple = (text_to_translate, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
         generic_key = json.dumps(generic_key_tuple, ensure_ascii=False)
-
+        
         if generic_key in translation_cache:
             cache_hit_count += 1
             translated_text = translation_cache[generic_key]
-
+            
             # "Promuovi" la vecchia voce di cache salvandola anche sotto la nuova chiave
             translation_cache[context_key] = translated_text
             write_to_log(f"CACHE HIT (Generico): Promossa traduzione per {context_for_log}")
 
-            content = Text.from_markup(
-                f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
-            console.print(
-                Panel(content, title=f"[bold green]💾 CACHE (Generico)[/] | {context_for_log}", border_style="green",
-                      title_align="left"))
+            content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
+            console.print(Panel(content, title=f"[bold green]💾 CACHE (Generico)[/] | {context_for_log}", border_style="green", title_align="left"))
             return translated_text
     
-    # 4. Fuzzy Match (Sperimentale)
-    if args.fuzzy_match:
-        fuzzy_key = "FUZZY::" + text_to_translate.strip().lower()
-        if fuzzy_key in translation_cache:
-            cache_hit_count += 1
-            translated_text = translation_cache[fuzzy_key]
-            content = Text.from_markup(
-                f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
-            console.print(
-                Panel(content, title=f"[bold green]💾 CACHE (Fuzzy)[/] | {context_for_log}", border_style="green",
-                      title_align="left"))
-            return translated_text
-
     # Se siamo qui, è un vero CACHE MISS. La traduzione avverrà più avanti.
-
+    # --- MODIFICA FINE ---
+        
     if args.custom_prompt:
         if "{text_to_translate}" not in args.custom_prompt:
-            console.print(f"    - ❌ ERRORE: Il prompt personalizzato non include '{{text_to_translate}}'. Salto.",
-                          style="red")
+            console.print(f"    - ❌ ERRORE: Il prompt personalizzato non include '{{text_to_translate}}'. Salto.", style="red")
             return text_to_translate
         prompt_text = args.custom_prompt.format(text_to_translate=text_to_translate)
     else:
         blacklist_str = ", ".join(BLACKLIST_TERMS)
-
+        
         prompt_lines = [
             f"Il tuo compito è tradurre testo ESCLUSIVAMENTE da {args.source_lang} a {args.target_lang}.",
             f"ISTRUZIONE CRITICA: Se il 'Testo originale' fornito di seguito NON è in {args.source_lang} (ad esempio, se è in giapponese, coreano, o qualsiasi altra lingua), DEVI restituire il testo originale identico, senza alcuna traduzione o modifica.",
@@ -1430,144 +1161,97 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
             f"Assicurati di mantenere identici i seguenti termini che NON devono essere tradotti, anche se appaiono in frasi più lunghe: {blacklist_str}.",
             "In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile."
         ]
-        
-        # Iniezione Glossario
-        if glossary_terms:
-            prompt_lines.append("\n--- GLOSSARIO OBBLIGATORIO ---")
-            prompt_lines.append("Usa tassativamente le seguenti traduzioni per i termini specificati:")
-            # Per evitare prompt troppo lunghi, potremmo filtrare solo i termini presenti nel testo,
-            # ma per ora iniettiamo tutto se non è enorme, o un subset.
-            # Qui iniettiamo tutto il glossario (attenzione ai limiti di token se il glossario è enorme)
-            gloss_str = json.dumps(glossary_terms, ensure_ascii=False, indent=2)
-            prompt_lines.append(gloss_str)
-            prompt_lines.append("--- FINE GLOSSARIO ---\n")
-
         prompt_base = " ".join(prompt_lines)
-
+        
+        # --- MODIFICA: Iniezione del contesto (statico + dinamico) ---
         if args.prompt_context: prompt_base += f"\nIstruzione aggiuntiva: {args.prompt_context}."
-        if dynamic_context: prompt_base += f"\n{dynamic_context}"
+        if dynamic_context: prompt_base += f"\n{dynamic_context}" # Questo ora includerà sia il contesto statico SIA la finestra dinamica
         prompt_base += "\nRispondi solo con la traduzione diretta."
+        # --- FINE MODIFICA ---
 
         prompt_text = f"{prompt_base}\nTesto originale:\n{text_to_translate}\n\nTraduzione in {args.target_lang}:"
-
+        
     while True:
         if args.interactive: check_and_wait_if_paused(context_for_log)
-
+        
         if command_lock.acquire(blocking=False):
             try:
                 if user_command_skip_file:
-                    console.print(
-                        "    [yellow]➡️  Comando 'skip file' rilevato. Interruzione della traduzione corrente...[/]")
-                    return text_to_translate
+                    console.print("    [yellow]➡️  Comando 'skip file' rilevato. Interruzione della traduzione corrente...[/]")
+                    return text_to_translate 
 
                 if user_command_skip_api:
                     rotate_api_key(triggered_by_user=True)
                     user_command_skip_api = False
             finally:
                 command_lock.release()
-
+        
         try:
             last_translation_prompt = prompt_text
             translated_text = _perform_genai_api_call(prompt_text)
-            
-            # --- Agentic Reflection (Critica e Correzione) ---
-            if args.reflect:
-                reflection_prompt = (
-                    f"Agisci come un revisore esperto. Analizza la seguente traduzione da {args.source_lang} a {args.target_lang}.\n"
-                    f"Originale: {text_to_translate}\n"
-                    f"Traduzione proposta: {translated_text}\n"
-                    f"Contesto: {args.game_name}\n"
-                    "Identifica eventuali errori grammaticali, di tono o incongruenze con il glossario. "
-                    "Se la traduzione è perfetta, restituiscila invariata. Altrimenti, fornisci SOLO la versione corretta."
-                )
-                # Chiamata extra per la reflection
-                translated_text = _perform_genai_api_call(reflection_prompt)
-                if not args.ollama_model:
-                    api_call_counts[current_api_key_index] += 1 # Conta come chiamata extra
-
             if not args.ollama_model:
                 api_call_counts[current_api_key_index] += 1
-            if args.wrap_at and args.wrap_at > 0: translated_text = textwrap.fill(translated_text, width=args.wrap_at,
-                                                                                  newline=args.newline_char,
-                                                                                  replace_whitespace=False)
+            if args.wrap_at and args.wrap_at > 0: translated_text = textwrap.fill(translated_text, width=args.wrap_at, newline=args.newline_char, replace_whitespace=False)
             major_failure_count = 0
 
-            content = Text.from_markup(
-                f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
-
+            content = Text.from_markup(f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
+            
             if args.ollama_model:
                 panel_title = f"[OLLAMA] | {context_for_log}"
             else:
                 panel_title = f"API ...{available_api_keys[current_api_key_index][-4:]} | {context_for_log}"
             console.print(Panel(content, title=panel_title, border_style="blue", title_align="left"))
-
-            # Salvataggio in cache
+            
+            # --- MODIFICA: Salvataggio in cache con la chiave contestuale ---
             translation_cache[context_key] = translated_text
-            if args.fuzzy_match:
-                fuzzy_key = "FUZZY::" + text_to_translate.strip().lower()
-                translation_cache[fuzzy_key] = translated_text
-                
-            write_to_log(f"CACHE MISS: Nuova traduzione salvata in cache per: {context_for_log}")
+            write_to_log(f"CACHE MISS: Nuova traduzione (contestuale) salvata in cache per: {context_for_log}")
+            # --- FINE MODIFICA ---
             return translated_text
-
+        
         except google.api_core.exceptions.PermissionDenied as e:
-            if args.ollama_model:
+            if args.ollama_model: # Non dovrebbe mai accadere con Ollama
                 console.print(f"    🛑 Errore inatteso con Ollama: {e}", style="red")
                 return text_to_translate
             active_key_short = available_api_keys[current_api_key_index][-4:]
             if args.server:
-                console.print(
-                    f"    ⚠️  [SERVER MODE] Chiave API ...{active_key_short} non valida. Attendo 60 secondi e riprovo...",
-                    style="yellow")
+                console.print(f"    ⚠️  [SERVER MODE] Chiave API ...{active_key_short} non valida. Attendo 60 secondi e riprovo...", style="yellow")
                 write_to_log(f"SERVER MODE: 'Permission Denied' su Key ...{active_key_short}. Attendo 60s. Errore: {e}")
-                time.sleep(60)
-                continue
+                time.sleep(60) 
+                continue 
             else:
-                console.print(
-                    f"    🛑 Chiave API ...{active_key_short} non valida o disabilitata. Verrà messa in blacklist.",
-                    style="red")
+                console.print(f"    🛑 Chiave API ...{active_key_short} non valida o disabilitata. Verrà messa in blacklist.", style="red")
                 write_to_log(f"ERRORE PERMESSO: {context_for_log}, Key ...{active_key_short}. Errore: {e}")
                 if blacklist_current_api_key():
                     continue
                 else:
-                    log_critical_error_and_exit(
-                        f"Nessuna API key valida disponibile dopo un errore di 'Permission Denied' sulla chiave ...{active_key_short}.")
-                    return text_to_translate
+                    log_critical_error_and_exit(f"Nessuna API key valida disponibile dopo un errore di 'Permission Denied' sulla chiave ...{active_key_short}.")
+                    return text_to_translate 
 
         except TRANSIENT_API_EXCEPTIONS as e:
-            if args.ollama_model:
+            if args.ollama_model: # Non dovrebbe mai accadere con Ollama
                 console.print(f"    🛑 Errore inatteso con Ollama: {e}", style="red")
                 return text_to_translate
             error_message = str(e).lower()
             active_key_short = available_api_keys[current_api_key_index][-4:]
-
-            if isinstance(e, google.api_core.exceptions.ResourceExhausted) and (
-                    "day" in error_message or "daily" in error_message):
-
+            
+            if isinstance(e, google.api_core.exceptions.ResourceExhausted) and ("day" in error_message or "daily" in error_message):
+                
                 if args.server:
-                    console.print(
-                        f"    ⚠️  [SERVER MODE] Limite quota GIORNALIERA raggiunto per ...{active_key_short}. Attendo 60 secondi e riprovo...",
-                        style="yellow")
-                    write_to_log(
-                        f"SERVER MODE: Limite quota GIORNALIERA su Key ...{active_key_short}. Attendo 60s. Errore: {e}")
-                    time.sleep(60)
-                    continue
+                    console.print(f"    ⚠️  [SERVER MODE] Limite quota GIORNALIERA raggiunto per ...{active_key_short}. Attendo 60 secondi e riprovo...", style="yellow")
+                    write_to_log(f"SERVER MODE: Limite quota GIORNALIERA su Key ...{active_key_short}. Attendo 60s. Errore: {e}")
+                    time.sleep(60) 
+                    continue 
                 else:
-                    console.print(
-                        f"    🛑 Limite quota GIORNALIERA raggiunto per la chiave ...{active_key_short}. Verrà messa in blacklist.",
-                        style="red")
+                    console.print(f"    🛑 Limite quota GIORNALIERA raggiunto per la chiave ...{active_key_short}. Verrà messa in blacklist.", style="red")
                     write_to_log(f"ERRORE QUOTA GIORNALIERA: {context_for_log}, Key ...{active_key_short}. Errore: {e}")
-                    if blacklist_current_api_key():
-                        continue
+                    if blacklist_current_api_key():  
+                        continue  
                     else:
-                        log_critical_error_and_exit(
-                            f"Nessuna API key valida disponibile dopo un errore di 'Quota Giornaliera' sulla chiave ...{active_key_short}.")
-                        return text_to_translate
+                        log_critical_error_and_exit(f"Nessuna API key valida disponibile dopo un errore di 'Quota Giornaliera' sulla chiave ...{active_key_short}.")
+                        return text_to_translate 
 
             major_failure_count += 1
-            console.print(
-                f"    ❌ Fallimento definitivo traduzione con Chiave ...{active_key_short}. Errore: {e}. Fallimenti consecutivi: {major_failure_count}/{MAX_MAJOR_FAILURES_THRESHOLD}",
-                style="red")
+            console.print(f"    ❌ Fallimento definitivo traduzione con Chiave ...{active_key_short}. Errore: {e}. Fallimenti consecutivi: {major_failure_count}/{MAX_MAJOR_FAILURES_THRESHOLD}", style="red")
             if args.rotate_on_limit_or_error and rotate_api_key(reason_override="Errore API"):
                 continue
             elif major_failure_count >= MAX_MAJOR_FAILURES_THRESHOLD and rotate_api_key():
@@ -1575,15 +1259,13 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
             else:
                 return text_to_translate
         except Exception as e:
-            if isinstance(e, ConnectionError):
+            if isinstance(e, ConnectionError): # Errore specifico di connessione a Ollama
                 console.print(f"    ⚠️  Connessione a Ollama fallita. Impossibile tradurre.", style="yellow")
                 return text_to_translate
             console.print(f"    🛑 Errore non gestito durante la traduzione: {e}", style="red")
             return text_to_translate
 
-
-def _extract_json_sample_texts(obj, keys_to_translate, sample_list, path="", match_full=False,
-                               limit=FILE_CONTEXT_SAMPLE_SIZE):
+def _extract_json_sample_texts(obj, keys_to_translate, sample_list, path="", match_full=False, limit=FILE_CONTEXT_SAMPLE_SIZE):
     if limit is not None and len(sample_list) >= limit: return
     if isinstance(obj, dict):
         for key, value in obj.items():
@@ -1596,7 +1278,6 @@ def _extract_json_sample_texts(obj, keys_to_translate, sample_list, path="", mat
     elif isinstance(obj, list):
         for item in obj: _extract_json_sample_texts(item, keys_to_translate, sample_list, path, match_full, limit)
 
-
 def should_translate_msgctxt(context_string):
     if not determine_if_translatable(context_string) or '_' in context_string: return False
     if '\t' in context_string: return False
@@ -1608,41 +1289,33 @@ def should_translate_msgctxt(context_string):
         if has_digits or is_mixed_case: return False
     return False
 
-
 def is_text_in_cache(text, args):
     key_tuple = (text, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
     key = json.dumps(key_tuple, ensure_ascii=False)
     return key in translation_cache
 
-# --- FUNZIONI DI TRADUZIONE PER FORMATO ---
-
 def traduci_testo_po(input_file, output_file, args):
-    if not polib:
-        log_critical_error_and_exit("Libreria 'polib' non trovata. Installala con 'pip install polib'.")
-        return
-
     global current_file_context, total_entries_translated, user_command_skip_file, current_file_total_entries, current_file_processed_entries
     current_file_context = None
     file_basename = os.path.basename(input_file)
-    try:
-        po_file = polib.pofile(input_file, encoding=args.encoding)
-    except Exception as e:
-        log_critical_error_and_exit(f"Impossibile leggere o parsare il file PO '{input_file}': {e}")
-
+    try: po_file = polib.pofile(input_file, encoding=args.encoding)
+    except Exception as e: log_critical_error_and_exit(f"Impossibile leggere o parsare il file PO '{input_file}': {e}")
+    
     all_texts_in_file = []
     for entry in po_file:
         if determine_if_translatable(entry.msgid): all_texts_in_file.append(entry.msgid)
         if should_translate_msgctxt(entry.msgctxt): all_texts_in_file.append(entry.msgctxt)
 
     all_translations_cached = all(
-        args.context_window == 0 and json.dumps(
-            (text, args.source_lang, args.target_lang, args.game_name, args.prompt_context),
-            ensure_ascii=False) in translation_cache
+        # Controllo semplificato: se ANCHE SOLO UNA chiave generica esiste, non possiamo
+        # garantire che la cache copra il nuovo contesto.
+        # Per una vera "all_cached" dovremmo controllare la chiave contestuale, ma è troppo complesso.
+        # Quindi, se --context-window > 0, forziamo la ri-traduzione (la cache a 2 passi funzionerà)
+        args.context_window == 0 and json.dumps((text, args.source_lang, args.target_lang, args.game_name, args.prompt_context), ensure_ascii=False) in translation_cache
         for text in all_texts_in_file
     ) if all_texts_in_file else False
-
-    entries_to_process = [entry for entry in po_file if
-                          determine_if_translatable(entry.msgid) or should_translate_msgctxt(entry.msgctxt)]
+    
+    entries_to_process = [entry for entry in po_file if determine_if_translatable(entry.msgid) or should_translate_msgctxt(entry.msgctxt)]
     current_file_total_entries = len(entries_to_process)
 
     is_cached_list = []
@@ -1650,16 +1323,13 @@ def traduci_testo_po(input_file, output_file, args):
         entry_fully_cached = True
         if should_translate_msgctxt(entry.msgctxt) and not is_text_in_cache(entry.msgctxt, args):
             entry_fully_cached = False
-        if entry_fully_cached and entry.msgid and determine_if_translatable(entry.msgid) and not is_text_in_cache(
-                entry.msgid, args):
+        if entry_fully_cached and entry.msgid and determine_if_translatable(entry.msgid) and not is_text_in_cache(entry.msgid, args):
             entry_fully_cached = False
         is_cached_list.append(entry_fully_cached)
-
+    
     if max_entries_limit is not None and max_entries_limit > 0 and current_file_total_entries > max_entries_limit:
-        console.print(
-            f"⏭️  [yellow]SKIP:[/] Il file '{file_basename}' ha {current_file_total_entries} entry, superando il limite di {max_entries_limit}. Verrà saltato.")
-        write_to_log(
-            f"SKIP (MAX ENTRIES): File '{file_basename}' ({current_file_total_entries} > {max_entries_limit}) saltato.")
+        console.print(f"⏭️  [yellow]SKIP:[/] Il file '{file_basename}' ha {current_file_total_entries} entry, superando il limite di {max_entries_limit}. Verrà saltato.")
+        write_to_log(f"SKIP (MAX ENTRIES): File '{file_basename}' ({current_file_total_entries} > {max_entries_limit}) saltato.")
         return
 
     current_file_processed_entries = 0
@@ -1671,175 +1341,158 @@ def traduci_testo_po(input_file, output_file, args):
             if sample_texts:
                 console.print(f"  Analisi di {len(sample_texts)} frasi per generare il contesto del file...")
                 current_file_context = generate_file_context("\n".join(sample_texts), file_basename, args)
-
+        
         if all_translations_cached and args.enable_file_context:
-            console.print(
-                f"  Tutte le traduzioni per '{file_basename}' sono già in cache. Salto la generazione del contesto.")
+             console.print(f"  Tutte le traduzioni per '{file_basename}' sono già in cache. Salto la generazione del contesto.")
 
+        # --- MODIFICA: Inizializza la finestra di contesto ---
         dynamic_context_window = deque(maxlen=args.context_window)
 
         with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TextColumn("• {task.completed}/{task.total} •"),
-                TimeElapsedColumn(), "•", SmartTimeRemainingColumn(is_cached_list, args.rpm),
-                console=console
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("• {task.completed}/{task.total} •"),
+            TimeElapsedColumn(), "•", SmartTimeRemainingColumn(is_cached_list, args.rpm),
+            console=console
         ) as progress:
             task = progress.add_task(f"[cyan]PO '{os.path.basename(input_file)}'[/]", total=current_file_total_entries)
-
+            
             for entry in po_file:
-                # --- MODIFICA: Controllo segnali (Stop/Skip) ---
-                try:
-                    check_signals()
-                except SkipFileException:
-                    console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
-                    return # Esce dalla funzione, passando al prossimo file
-                except StopProcessingException:
-                    raise # Rilancia per fermare tutto
-                # -----------------------------------------------
-
+                if command_lock.acquire(blocking=False):
+                    try:
+                        if user_command_skip_file: raise KeyboardInterrupt
+                    finally:
+                        command_lock.release()
+                
                 translated_this_entry = False
                 original_context = entry.msgctxt
                 context_for_prompt, context_is_translatable_prose = None, should_translate_msgctxt(original_context)
-
+                
                 context_log = f"PO '{file_basename}' | Riga {entry.linenum} (ctx)"
                 msgid_log = f"PO '{file_basename}' | Riga {entry.linenum} (msgid)"
-
+                
                 if context_is_translatable_prose:
-                    progress.update(task,
-                                    description=f"[cyan]PO '{os.path.basename(input_file)}'[/] | Riga {entry.linenum} (ctx)")
-
+                    progress.update(task, description=f"[cyan]PO '{os.path.basename(input_file)}'[/] | Riga {entry.linenum} (ctx)")
+                    
+                    # --- MODIFICA: Costruzione contesto per msgctxt ---
                     context_parts = []
                     if current_file_context:
                         context_parts.append(f"Contesto generale del file: '{current_file_context}'")
                     if args.context_window > 0 and dynamic_context_window:
-                        context_lines = [
-                            f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
+                        context_lines = [f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
                         for src, trans in dynamic_context_window:
                             context_lines.append(f'- "{src}" -> "{trans}"')
                         context_parts.append("\n".join(context_lines))
                     final_dynamic_context = "\n".join(context_parts)
-
-                    translated_context = get_translation_from_api(original_context, context_log, args,
-                                                                  dynamic_context=final_dynamic_context)
-
+                                                
+                    translated_context = get_translation_from_api(original_context, context_log, args, dynamic_context=final_dynamic_context)
+                    
                     if args.context_window > 0:
                         dynamic_context_window.append((original_context, translated_context))
+                    # --- FINE MODIFICA ---
 
                     entry.msgctxt = translated_context
                     context_for_prompt = translated_context
                     total_entries_translated += 1
                     translated_this_entry = True
 
-                elif original_context:
-                    context_for_prompt = original_context
-
+                elif original_context: context_for_prompt = original_context
+                
                 if entry.msgid and determine_if_translatable(entry.msgid):
-                    progress.update(task,
-                                    description=f"[cyan]PO '{os.path.basename(input_file)}'[/] | Riga {entry.linenum} (msgid)")
-
+                    progress.update(task, description=f"[cyan]PO '{os.path.basename(input_file)}'[/] | Riga {entry.linenum} (msgid)")
+                    
+                    # --- MODIFICA: Costruzione contesto per msgid ---
                     context_parts = []
                     if current_file_context:
                         context_parts.append(f"Contesto generale del file: '{current_file_context}'")
-                    if context_for_prompt:
+                    if context_for_prompt: # Aggiunge il contesto specifico dell'entry (originale o tradotto)
                         context_parts.append(f"Contesto specifico di questa entry: '{context_for_prompt}'")
-
+                    
                     if args.context_window > 0 and dynamic_context_window:
-                        context_lines = [
-                            f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
+                        context_lines = [f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
                         for src, trans in dynamic_context_window:
                             context_lines.append(f'- "{src}" -> "{trans}"')
                         context_parts.append("\n".join(context_lines))
-
+                    
                     final_dynamic_context = "\n".join(context_parts)
-
+                    
                     original_msgid = entry.msgid
-                    translated_text = get_translation_from_api(original_msgid, msgid_log, args,
-                                                               dynamic_context=final_dynamic_context)
-
+                    translated_text = get_translation_from_api(original_msgid, msgid_log, args, dynamic_context=final_dynamic_context)
+                    
                     if args.context_window > 0:
                         dynamic_context_window.append((original_msgid, translated_text))
-
+                    # --- FINE MODIFICA ---
+                    
                     entry.msgstr = translated_text
                     total_entries_translated += 1
                     translated_this_entry = True
-
-                elif entry.msgid:
-                    entry.msgstr = entry.msgid
+                    
+                elif entry.msgid: entry.msgstr = entry.msgid
 
                 if translated_this_entry:
-                    current_file_processed_entries += 1
+                    current_file_processed_entries +=1
                     progress.advance(task)
 
     except KeyboardInterrupt:
-        with command_lock:
-            is_skip_command = user_command_skip_file
-        if is_skip_command:
-            console.print(
-                f"\n[yellow]➡️  Comando 'skip file' ricevuto. Salvataggio dei progressi per '{file_basename}'...[/]")
-        else:
-            console.print(
-                f"\n[red]🛑 Interruzione da tastiera. Salvataggio dei progressi per '{file_basename}'...[/]"); raise
+        with command_lock: is_skip_command = user_command_skip_file
+        if is_skip_command: console.print(f"\n[yellow]➡️  Comando 'skip file' ricevuto. Salvataggio dei progressi per '{file_basename}'...[/]")
+        else: console.print(f"\n[red]🛑 Interruzione da tastiera. Salvataggio dei progressi per '{file_basename}'...[/]"); raise
     finally:
         try:
             po_file.save(output_file)
             console.print(f"\n✅ File salvato in: '[green]{output_file}[/]'")
             check_and_save_cache()
-        except Exception as e:
-            log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
+        except Exception as e: log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
         with command_lock:
             if user_command_skip_file: user_command_skip_file = False
-
 
 def traduci_testo_json(input_file, output_file, args):
     global current_file_context, total_entries_translated, user_command_skip_file, current_file_total_entries, current_file_processed_entries
     current_file_context = None
     file_basename = os.path.basename(input_file)
     try:
-        with open(input_file, 'r', encoding=args.encoding) as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError) as e:
-        log_critical_error_and_exit(f"Impossibile leggere o parsare il file JSON '{input_file}': {e}")
-
+        with open(input_file, 'r', encoding=args.encoding) as f: data = json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError) as e: log_critical_error_and_exit(f"Impossibile leggere o parsare il file JSON '{input_file}': {e}")
+    
     keys_to_translate = {k.strip() for k in args.json_keys.split(',')}
     translated_texts_for_only_output = []
-
+    
     all_texts_in_file = []
-    _extract_json_sample_texts(data, keys_to_translate, all_texts_in_file, match_full=args.match_full_json_path,
-                               limit=None)
+    _extract_json_sample_texts(data, keys_to_translate, all_texts_in_file, match_full=args.match_full_json_path, limit=None)
 
     all_translations_cached = all(
-        args.context_window == 0 and json.dumps(
-            (text, args.source_lang, args.target_lang, args.game_name, args.prompt_context),
-            ensure_ascii=False) in translation_cache
+        args.context_window == 0 and json.dumps((text, args.source_lang, args.target_lang, args.game_name, args.prompt_context), ensure_ascii=False) in translation_cache
         for text in all_texts_in_file
     ) if all_texts_in_file else False
 
+    # --- MODIFICA: Inizializza la finestra di contesto ---
     dynamic_context_window = deque(maxlen=args.context_window)
 
     progress = None
     task = None
-
+    
+    # --- MODIFICA: La funzione ricorsiva accetta la finestra di contesto ---
     def _translate_recursive(obj, path="", context_window=None):
         nonlocal progress, task
         global total_entries_translated, current_file_processed_entries
         if isinstance(obj, dict):
             for key, value in list(obj.items()):
-                # --- MODIFICA: Controllo segnali (Stop/Skip) ---
-                check_signals() # Solleva eccezioni gestite nel blocco try/except principale
-                # -----------------------------------------------
+                if command_lock.acquire(blocking=False):
+                    try:
+                        if user_command_skip_file: raise KeyboardInterrupt
+                    finally:
+                        command_lock.release()
 
                 current_path = f"{path}.{key}" if path else key
-                is_match = (current_path in keys_to_translate) if args.match_full_json_path else (
-                            key in keys_to_translate)
+                is_match = (current_path in keys_to_translate) if args.match_full_json_path else (key in keys_to_translate)
                 if is_match and determine_if_translatable(value):
-                    progress.update(task,
-                                    description=f"[cyan]JSON '{file_basename}'[/] | Chiave: {current_path[:30]}...")
+                    progress.update(task, description=f"[cyan]JSON '{file_basename}'[/] | Chiave: {current_path[:30]}...")
                     original_value = value
                     context_log = f"JSON '{file_basename}' | Chiave: '{current_path}'"
-
+                    
+                    # --- MODIFICA: Costruzione contesto per JSON ---
                     context_parts = []
                     if current_file_context:
                         context_parts.append(f"Contesto generale del file: '{current_file_context}'")
@@ -1848,26 +1501,28 @@ def traduci_testo_json(input_file, output_file, args):
                         for src, trans in context_window:
                             context_lines.append(f'- "{src}" -> "{trans}"')
                         context_parts.append("\n".join(context_lines))
-
+                    
                     final_dynamic_context = "\n".join(context_parts)
-
-                    translated_value = get_translation_from_api(original_value, context_log, args,
-                                                                dynamic_context=final_dynamic_context)
-
+                    
+                    translated_value = get_translation_from_api(original_value, context_log, args, dynamic_context=final_dynamic_context)
+                    
                     if args.context_window > 0 and context_window is not None:
                         context_window.append((original_value, translated_value))
-
+                    # --- FINE MODIFICA ---
+                    
                     obj[key] = translated_value
                     if args.translation_only_output: translated_texts_for_only_output.append(translated_value)
                     progress.advance(task)
                     total_entries_translated += 1
                     current_file_processed_entries += 1
-
+                
+                # --- MODIFICA: Passa la finestra di contesto alla chiamata ricorsiva ---
                 _translate_recursive(value, current_path, context_window=context_window)
         elif isinstance(obj, list):
             for i, item in enumerate(obj):
+                # --- MODIFICA: Passa la finestra di contesto alla chiamata ricorsiva ---
                 _translate_recursive(item, f"{path}[{i}]", context_window=context_window)
-
+    
     try:
         if args.enable_file_context and not all_translations_cached:
             sample_texts = all_texts_in_file[:None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE]
@@ -1876,78 +1531,60 @@ def traduci_testo_json(input_file, output_file, args):
                 current_file_context = generate_file_context("\n".join(sample_texts), file_basename, args)
 
         if all_translations_cached and args.enable_file_context:
-            console.print(
-                f"  Tutte le traduzioni per '{file_basename}' sono già in cache. Salto la generazione del contesto.")
+            console.print(f"  Tutte le traduzioni per '{file_basename}' sono già in cache. Salto la generazione del contesto.")
 
         current_file_total_entries = len([text for text in all_texts_in_file if determine_if_translatable(text)])
-
+        
         is_cached_list = [is_text_in_cache(t, args) for t in all_texts_in_file if determine_if_translatable(t)]
 
         if max_entries_limit is not None and max_entries_limit > 0 and current_file_total_entries > max_entries_limit:
-            console.print(
-                f"⏭️  [yellow]SKIP:[/] Il file '{file_basename}' ha {current_file_total_entries} entry, superando il limite di {max_entries_limit}. Verrà saltato.")
-            write_to_log(
-                f"SKIP (MAX ENTRIES): File '{file_basename}' ({current_file_total_entries} > {max_entries_limit}) saltato.")
+            console.print(f"⏭️  [yellow]SKIP:[/] Il file '{file_basename}' ha {current_file_total_entries} entry, superando il limite di {max_entries_limit}. Verrà saltato.")
+            write_to_log(f"SKIP (MAX ENTRIES): File '{file_basename}' ({current_file_total_entries} > {max_entries_limit}) saltato.")
             return
 
         current_file_processed_entries = 0
         with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TextColumn("• {task.completed}/{task.total} •"),
-                TimeElapsedColumn(), "•", SmartTimeRemainingColumn(is_cached_list, args.rpm),
-                console=console
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("• {task.completed}/{task.total} •"),
+            TimeElapsedColumn(), "•", SmartTimeRemainingColumn(is_cached_list, args.rpm),
+            console=console
         ) as progress_instance:
             progress = progress_instance
             task = progress.add_task(f"[cyan]JSON '{file_basename}'[/]", total=current_file_total_entries)
-
+            
+            # --- MODIFICA: Passa la finestra di contesto alla chiamata iniziale ---
             _translate_recursive(data, context_window=dynamic_context_window)
 
-    except SkipFileException:
-        console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
-        return
-    except StopProcessingException:
-        raise # Rilancia per fermare tutto
     except KeyboardInterrupt:
-        with command_lock:
-            is_skip_command = user_command_skip_file
-        if is_skip_command:
-            console.print(
-                f"\n[yellow]➡️  Comando 'skip file' ricevuto. Salvataggio dei progressi per '{file_basename}'...[/]")
-        else:
-            console.print(
-                f"\n[red]🛑 Interruzione da tastiera. Salvataggio dei progressi per '{file_basename}'...[/]"); raise
+        with command_lock: is_skip_command = user_command_skip_file
+        if is_skip_command: console.print(f"\n[yellow]➡️  Comando 'skip file' ricevuto. Salvataggio dei progressi per '{file_basename}'...[/]")
+        else: console.print(f"\n[red]🛑 Interruzione da tastiera. Salvataggio dei progressi per '{file_basename}'...[/]"); raise
     finally:
         try:
             with open(output_file, 'w', encoding=args.encoding) as f:
-                if args.translation_only_output:
-                    f.write("\n".join(translated_texts_for_only_output) + "\n")
-                else:
-                    json.dump(data, f, ensure_ascii=False, indent=4)
+                if args.translation_only_output: f.write("\n".join(translated_texts_for_only_output) + "\n")
+                else: json.dump(data, f, ensure_ascii=False, indent=4)
             console.print(f"\n✅ File salvato in: '[green]{output_file}[/]'")
             check_and_save_cache()
-        except Exception as e:
-            log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
+        except Exception as e: log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
         with command_lock:
             if user_command_skip_file: user_command_skip_file = False
-
 
 def traduci_testo_csv(input_file, output_file, args):
     global current_file_context, total_entries_translated, user_command_skip_file, current_file_total_entries, current_file_processed_entries
     current_file_context = None
     file_basename = os.path.basename(input_file)
     try:
-        with open(input_file, 'r', encoding=args.encoding, newline='') as infile:
-            rows = list(csv.reader(infile, delimiter=args.delimiter))
-    except Exception as e:
-        log_critical_error_and_exit(f"Impossibile leggere il file CSV '{input_file}': {e}")
-
+        with open(input_file, 'r', encoding=args.encoding, newline='') as infile: rows = list(csv.reader(infile, delimiter=args.delimiter))
+    except Exception as e: log_critical_error_and_exit(f"Impossibile leggere il file CSV '{input_file}': {e}")
+    
     header = rows[0] if rows else None
     data_rows = rows[1:] if header else rows
     output_rows = [row[:] for row in rows]
-
+    
     if args.resume and os.path.exists(output_file):
         try:
             with open(output_file, 'r', encoding=args.encoding, newline='') as resumed_file:
@@ -1955,110 +1592,98 @@ def traduci_testo_csv(input_file, output_file, args):
                 if len(resumed_rows) == len(output_rows):
                     output_rows = resumed_rows
                     console.print(f"  Resume mode: Caricate {len(output_rows)} righe da '{output_file}'.")
-        except Exception as e:
-            console.print(f"⚠️  [yellow]Attenzione: Impossibile leggere il file di resume '{output_file}': {e}.[/]")
-
+        except Exception as e: console.print(f"⚠️  [yellow]Attenzione: Impossibile leggere il file di resume '{output_file}': {e}.[/]")
+    
     all_texts_in_file = [
-        row[args.translate_col] for row in data_rows
+        row[args.translate_col] for row in data_rows 
         if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col])
     ]
     all_translations_cached = all(
-        args.context_window == 0 and json.dumps(
-            (text, args.source_lang, args.target_lang, args.game_name, args.prompt_context),
-            ensure_ascii=False) in translation_cache
+        args.context_window == 0 and json.dumps((text, args.source_lang, args.target_lang, args.game_name, args.prompt_context), ensure_ascii=False) in translation_cache
         for text in all_texts_in_file
     ) if all_texts_in_file else False
-
+    
     translated_texts_for_only_output = []
-
+    
     try:
         if args.enable_file_context and not all_translations_cached:
             sample_limit = None if args.full_context_sample else FILE_CONTEXT_SAMPLE_SIZE
-            sample_texts = [row[args.translate_col] for row in data_rows if
-                            len(row) > args.translate_col and determine_if_translatable(row[args.translate_col])][
-                :sample_limit]
+            sample_texts = [row[args.translate_col] for row in data_rows if len(row) > args.translate_col and determine_if_translatable(row[args.translate_col])][:sample_limit]
             if sample_texts:
                 console.print(f"  Analisi di {len(sample_texts)} righe per generare il contesto...")
                 current_file_context = generate_file_context("\n".join(sample_texts), file_basename, args)
-
+        
         if all_translations_cached and args.enable_file_context:
-            console.print(f"  Tutte le traduzioni per '{file_basename}' sono già in cache. Salto generazione contesto.")
+             console.print(f"  Tutte le traduzioni per '{file_basename}' sono già in cache. Salto generazione contesto.")
 
         rows_to_translate_indices = []
         output_data_rows = output_rows[1:] if header else output_rows
         for i, row in enumerate(output_data_rows):
-            is_already_translated = args.resume and len(row) > args.output_col and row[args.output_col].strip() and (
-                        args.output_col != args.translate_col or row[args.output_col] != data_rows[i][
-                    args.translate_col])
+            is_already_translated = args.resume and len(row) > args.output_col and row[args.output_col].strip() and (args.output_col != args.translate_col or row[args.output_col] != data_rows[i][args.translate_col])
             needs_translation = len(row) > args.translate_col and determine_if_translatable(row[args.translate_col])
             if needs_translation and not is_already_translated:
                 rows_to_translate_indices.append(i)
-
+        
         current_file_total_entries = len(rows_to_translate_indices)
 
         is_cached_list = []
         for i in rows_to_translate_indices:
             text = output_data_rows[i][args.translate_col]
             is_cached_list.append(is_text_in_cache(text, args))
-
+        
         if max_entries_limit is not None and max_entries_limit > 0 and current_file_total_entries > max_entries_limit:
-            console.print(
-                f"⏭️  [yellow]SKIP:[/] Il file '{file_basename}' ha {current_file_total_entries} entry, superando il limite di {max_entries_limit}. Verrà saltato.")
-            write_to_log(
-                f"SKIP (MAX ENTRIES): File '{file_basename}' ({current_file_total_entries} > {max_entries_limit}) saltato.")
+            console.print(f"⏭️  [yellow]SKIP:[/] Il file '{file_basename}' ha {current_file_total_entries} entry, superando il limite di {max_entries_limit}. Verrà saltato.")
+            write_to_log(f"SKIP (MAX ENTRIES): File '{file_basename}' ({current_file_total_entries} > {max_entries_limit}) saltato.")
             return
-
+        
         current_file_processed_entries = 0
-
+        
+        # --- MODIFICA: Inizializza la finestra di contesto ---
         dynamic_context_window = deque(maxlen=args.context_window)
 
         with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TextColumn("• {task.completed}/{task.total} •"),
-                TimeElapsedColumn(), "•", SmartTimeRemainingColumn(is_cached_list, args.rpm),
-                console=console
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("• {task.completed}/{task.total} •"),
+            TimeElapsedColumn(), "•", SmartTimeRemainingColumn(is_cached_list, args.rpm),
+            console=console
         ) as progress:
             task = progress.add_task(f"[cyan]CSV '{file_basename}'[/]", total=current_file_total_entries)
-
+            
             for i in rows_to_translate_indices:
                 row = output_data_rows[i]
                 display_row_num = i + (2 if header else 1)
-
-                # --- MODIFICA: Controllo segnali (Stop/Skip) ---
-                try:
-                    check_signals()
-                except SkipFileException:
-                    console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
-                    return # Esce dalla funzione
-                except StopProcessingException:
-                    raise # Rilancia per fermare tutto
-                # -----------------------------------------------
-
+                
+                if command_lock.acquire(blocking=False):
+                    try:
+                        if user_command_skip_file: raise KeyboardInterrupt
+                    finally:
+                        command_lock.release()
+                
                 original_text = row[args.translate_col]
                 progress.update(task, description=f"[cyan]CSV '{file_basename}'[/] | Riga {display_row_num}")
                 context_log = f"CSV '{file_basename}' | Riga {display_row_num}"
-
+                
+                # --- MODIFICA: Costruzione contesto per CSV ---
                 context_parts = []
                 if current_file_context:
                     context_parts.append(f"Contesto generale del file: '{current_file_context}'")
                 if args.context_window > 0 and dynamic_context_window:
-                    context_lines = [
-                        f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
+                    context_lines = [f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
                     for src, trans in dynamic_context_window:
                         context_lines.append(f'- "{src}" -> "{trans}"')
                     context_parts.append("\n".join(context_lines))
-
+                
                 final_dynamic_context = "\n".join(context_parts)
-
-                translated_text = get_translation_from_api(original_text, context_log, args,
-                                                           dynamic_context=final_dynamic_context)
-
+                
+                translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=final_dynamic_context)
+                
                 if args.context_window > 0:
                     dynamic_context_window.append((original_text, translated_text))
-
+                # --- FINE MODIFICA ---
+                
                 while len(row) <= args.output_col: row.append('')
                 row[args.output_col] = translated_text
                 if args.translation_only_output: translated_texts_for_only_output.append(translated_text)
@@ -2067,14 +1692,9 @@ def traduci_testo_csv(input_file, output_file, args):
                 current_file_processed_entries += 1
 
     except KeyboardInterrupt:
-        with command_lock:
-            is_skip_command = user_command_skip_file
-        if is_skip_command:
-            console.print(
-                f"\n[yellow]➡️  Comando 'skip file' ricevuto. Salvataggio dei progressi per '{file_basename}'...[/]")
-        else:
-            console.print(
-                f"\n[red]🛑 Interruzione da tastiera. Salvataggio dei progressi per '{file_basename}'...[/]"); raise
+        with command_lock: is_skip_command = user_command_skip_file
+        if is_skip_command: console.print(f"\n[yellow]➡️  Comando 'skip file' ricevuto. Salvataggio dei progressi per '{file_basename}'...[/]")
+        else: console.print(f"\n[red]🛑 Interruzione da tastiera. Salvataggio dei progressi per '{file_basename}'...[/]"); raise
     finally:
         try:
             with open(output_file, 'w', encoding=args.encoding, newline='') as outfile:
@@ -2085,264 +1705,18 @@ def traduci_testo_csv(input_file, output_file, args):
                     writer.writerows(output_rows)
             console.print(f"\n✅ File salvato in: '[green]{output_file}[/]'")
             check_and_save_cache()
-        except Exception as e:
-            log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
+        except Exception as e: log_critical_error_and_exit(f"Impossibile scrivere il file di output '{output_file}': {e}")
         with command_lock:
             if user_command_skip_file: user_command_skip_file = False
-
-
-def traduci_testo_xlsx(input_file, output_file, args):
-    if not openpyxl:
-        log_critical_error_and_exit("Libreria 'openpyxl' non trovata. Installala con 'pip install openpyxl'.")
-        return
-
-    global current_file_context, total_entries_translated, user_command_skip_file, current_file_total_entries, current_file_processed_entries
-    current_file_context = None
-    file_basename = os.path.basename(input_file)
-
-    try:
-        wb = openpyxl.load_workbook(input_file)
-        ws = wb.active
-    except Exception as e:
-        log_critical_error_and_exit(f"Impossibile leggere il file Excel '{input_file}': {e}")
-
-    # Converti lettere colonna in indici 1-based
-    try:
-        src_col_idx = openpyxl.utils.column_index_from_string(args.xlsx_source_col)
-        tgt_col_idx = openpyxl.utils.column_index_from_string(args.xlsx_target_col)
-    except Exception as e:
-        log_critical_error_and_exit(f"Errore indici colonne Excel: {e}")
-
-    rows_to_process = []
-    for row in ws.iter_rows(min_row=1):
-        if len(row) >= src_col_idx:
-            cell = row[src_col_idx - 1]
-            if cell.value and determine_if_translatable(str(cell.value)):
-                rows_to_process.append(row)
-
-    current_file_total_entries = len(rows_to_process)
-    
-    if max_entries_limit is not None and max_entries_limit > 0 and current_file_total_entries > max_entries_limit:
-        console.print(f"⏭️  [yellow]SKIP:[/] File '{file_basename}' troppo grande ({current_file_total_entries}).")
-        return
-
-    current_file_processed_entries = 0
-    dynamic_context_window = deque(maxlen=args.context_window)
-    
-    # Cache check list
-    is_cached_list = [is_text_in_cache(str(r[src_col_idx-1].value), args) for r in rows_to_process]
-
-    with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TextColumn("• {task.completed}/{task.total} •"),
-            TimeElapsedColumn(), "•", SmartTimeRemainingColumn(is_cached_list, args.rpm),
-            console=console
-    ) as progress:
-        task = progress.add_task(f"[cyan]XLSX '{file_basename}'[/]", total=current_file_total_entries)
-
-        for row in rows_to_process:
-            # --- MODIFICA: Controllo segnali (Stop/Skip) ---
-            try:
-                check_signals()
-            except SkipFileException:
-                console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
-                return # Esce dalla funzione
-            except StopProcessingException:
-                raise # Rilancia per fermare tutto
-            # -----------------------------------------------
-
-            src_cell = row[src_col_idx - 1]
-            original_text = str(src_cell.value)
-            
-            # Assicurati che la riga abbia abbastanza celle
-            while len(row) < tgt_col_idx:
-                # Questo è tricky con iter_rows, meglio usare ws.cell()
-                pass 
-            
-            # Usa coordinate dirette per scrittura
-            tgt_cell = ws.cell(row=src_cell.row, column=tgt_col_idx)
-
-            progress.update(task, description=f"[cyan]XLSX[/] | Riga {src_cell.row}")
-            context_log = f"XLSX '{file_basename}' | Riga {src_cell.row}"
-
-            # Context building (semplificato)
-            context_parts = []
-            if current_file_context: context_parts.append(f"Contesto: '{current_file_context}'")
-            if args.context_window > 0 and dynamic_context_window:
-                 context_parts.append("\n".join([f'- "{s}" -> "{t}"' for s, t in dynamic_context_window]))
-            final_dynamic_context = "\n".join(context_parts)
-
-            translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=final_dynamic_context)
-
-            if args.context_window > 0:
-                dynamic_context_window.append((original_text, translated_text))
-
-            tgt_cell.value = translated_text
-            total_entries_translated += 1
-            current_file_processed_entries += 1
-            progress.advance(task)
-
-    try:
-        wb.save(output_file)
-        console.print(f"\n✅ File salvato in: '[green]{output_file}[/]'")
-        check_and_save_cache()
-    except Exception as e:
-        log_critical_error_and_exit(f"Impossibile salvare Excel '{output_file}': {e}")
-    
-    with command_lock:
-        if user_command_skip_file: user_command_skip_file = False
-
-
-def traduci_testo_srt(input_file, output_file, args):
-    global current_file_context, total_entries_translated, user_command_skip_file, current_file_total_entries, current_file_processed_entries
-    file_basename = os.path.basename(input_file)
-    
-    try:
-        with open(input_file, 'r', encoding=args.encoding) as f:
-            content = f.read()
-    except Exception as e:
-        log_critical_error_and_exit(f"Errore lettura SRT '{input_file}': {e}")
-
-    # Regex per blocchi SRT: Numero \n Timecode \n Testo \n\n
-    pattern = re.compile(r'(\d+)\s*\n(\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3})\s*\n(.*?)(?=\n\s*\n|\Z)', re.DOTALL)
-    matches = list(pattern.finditer(content))
-    
-    current_file_total_entries = len(matches)
-    current_file_processed_entries = 0
-    
-    new_content_parts = []
-    last_pos = 0
-    
-    dynamic_context_window = deque(maxlen=args.context_window)
-    is_cached_list = [is_text_in_cache(m.group(3).strip(), args) for m in matches]
-
-    with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TextColumn("• {task.completed}/{task.total} •"),
-            TimeElapsedColumn(), "•", SmartTimeRemainingColumn(is_cached_list, args.rpm),
-            console=console
-    ) as progress:
-        task = progress.add_task(f"[cyan]SRT '{file_basename}'[/]", total=current_file_total_entries)
-
-        for match in matches:
-            # --- MODIFICA: Controllo segnali (Stop/Skip) ---
-            try:
-                check_signals()
-            except SkipFileException:
-                console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
-                return # Esce dalla funzione
-            except StopProcessingException:
-                raise # Rilancia per fermare tutto
-            # -----------------------------------------------
-
-            # Aggiungi parte non matchata (es. newline tra blocchi)
-            new_content_parts.append(content[last_pos:match.start()])
-            
-            seq_num = match.group(1)
-            timecode = match.group(2)
-            original_text = match.group(3).strip()
-            
-            progress.update(task, description=f"[cyan]SRT[/] | Seq {seq_num}")
-            context_log = f"SRT '{file_basename}' | Seq {seq_num}"
-
-            # Context
-            context_parts = []
-            if args.context_window > 0 and dynamic_context_window:
-                 context_parts.append("\n".join([f'- "{s}" -> "{t}"' for s, t in dynamic_context_window]))
-            final_dynamic_context = "\n".join(context_parts)
-
-            if determine_if_translatable(original_text):
-                translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=final_dynamic_context)
-                if args.context_window > 0:
-                    dynamic_context_window.append((original_text, translated_text))
-                total_entries_translated += 1
-            else:
-                translated_text = original_text
-
-            # Ricostruisci blocco
-            new_block = f"{seq_num}\n{timecode}\n{translated_text}"
-            new_content_parts.append(new_block)
-            
-            last_pos = match.end()
-            current_file_processed_entries += 1
-            progress.advance(task)
-
-    new_content_parts.append(content[last_pos:]) # Coda file
-    
-    try:
-        with open(output_file, 'w', encoding=args.encoding) as f:
-            f.write("".join(new_content_parts))
-        console.print(f"\n✅ File salvato in: '[green]{output_file}[/]'")
-        check_and_save_cache()
-    except Exception as e:
-        log_critical_error_and_exit(f"Impossibile salvare SRT '{output_file}': {e}")
-    
-    with command_lock:
-        if user_command_skip_file: user_command_skip_file = False
-
 
 def process_files_recursively(args):
     global user_command_skip_file, total_files_translated, current_file_total_entries, current_file_processed_entries
     base_input_dir = os.path.abspath(args.input)
-    base_output_dir = f"{base_input_dir}_tradotto" if os.path.basename(base_input_dir) != "input" else os.path.join(
-        os.path.dirname(base_input_dir) or '.', "tradotto")
-    
-    # Override output dir se specificato
-    if hasattr(args, 'output_dir') and args.output_dir and args.output_dir != "output":
-        base_output_dir = os.path.abspath(args.output_dir)
-
+    base_output_dir = f"{base_input_dir}_tradotto" if os.path.basename(base_input_dir) != "input" else os.path.join(os.path.dirname(base_input_dir) or '.', "tradotto")
     console.print(f"\nScansione della cartella '[blue]{base_input_dir}[/]' per i file *.{args.file_type}...")
     console.print(f"Output salvato in: '[blue]{base_output_dir}[/]'")
-    
-    # --- DRY RUN LOGIC ---
-    if args.dry_run:
-        console.print(Panel("[bold yellow]MODALITÀ DRY RUN ATTIVA[/]", border_style="yellow"))
-        write_to_log("--- INIZIO DRY RUN ---") # Log per GUI
-        total_chars = 0
-        file_count = 0
-        
-        for root, _, files in os.walk(base_input_dir):
-            for f in files:
-                if f.endswith(f'.{args.file_type}'):
-                    file_count += 1
-                    try:
-                        with open(os.path.join(root, f), 'r', encoding=args.encoding, errors='ignore') as fp:
-                            total_chars += len(fp.read())
-                    except: pass
-        
-        est_tokens = int(total_chars / ESTIMATED_CHARS_PER_TOKEN)
-        est_cost = (est_tokens / 1_000_000) * 0.35 # Prezzo indicativo Gemini Flash
-        
-        report = (
-            f"File Trovati: {file_count}\n"
-            f"Caratteri Totali: {total_chars:,}\n"
-            f"Token Stimati: {est_tokens:,}\n"
-            f"Costo Stimato (Gemini Flash): ~${est_cost:.4f}"
-        )
-        
-        table = Table(title="Riepilogo Dry Run", box=ROUNDED) # Fix: box=ROUNDED
-        table.add_column("Metrica", style="cyan")
-        table.add_column("Valore Stimato", style="bold white")
-        table.add_row("File Trovati", str(file_count))
-        table.add_row("Caratteri Totali", f"{total_chars:,}")
-        table.add_row("Token Stimati", f"{est_tokens:,}")
-        table.add_row("Costo Stimato (Gemini Flash)", f"~${est_cost:.4f}")
-        console.print(table)
-        
-        write_to_log(report) # Invia report alla GUI
-        write_to_log("--- FINE DRY RUN ---")
-        return # Esce senza tradurre
-    # ---------------------
-
     os.makedirs(base_output_dir, exist_ok=True)
-    file_paths_to_process = [os.path.join(r, f) for r, _, files in os.walk(base_input_dir) for f in files if
-                             f.endswith(f'.{args.file_type}')]
+    file_paths_to_process = [os.path.join(r, f) for r, _, files in os.walk(base_input_dir) for f in files if f.endswith(f'.{args.file_type}')]
     total_files_found = len(file_paths_to_process)
     console.print(f"✅ Trovati {total_files_found} file da elaborare.")
     if total_files_found == 0:
@@ -2352,60 +1726,48 @@ def process_files_recursively(args):
         if graceful_exit_requested.is_set():
             console.print("\n[yellow]🛑 Uscita graduale richiesta. Interruzione del processo.[/]")
             break
-
+        
         skip_this_file = False
         if command_lock.acquire(blocking=False):
             try:
                 if user_command_skip_file:
-                    console.print(
-                        f"[yellow]➡️  Comando 'skip file' rilevato. Saltando: '{os.path.basename(input_path)}'.[/]")
+                    console.print(f"[yellow]➡️  Comando 'skip file' rilevato. Saltando: '{os.path.basename(input_path)}'.[/]")
                     skip_this_file = True
             finally:
                 command_lock.release()
         if skip_this_file:
             continue
-
+        
         current_file_total_entries, current_file_processed_entries = 0, 0
         if script_args.interactive: check_and_wait_if_paused(f"Inizio file: {os.path.basename(input_path)}")
         console.print(Rule(f"File [{file_index + 1}/{total_files_found}]", style="bold cyan"))
-
+        
         relative_path_dir = os.path.relpath(os.path.dirname(input_path), base_input_dir)
-        current_output_dir = os.path.join(base_output_dir,
-                                          relative_path_dir) if relative_path_dir != '.' else base_output_dir
+        current_output_dir = os.path.join(base_output_dir, relative_path_dir) if relative_path_dir != '.' else base_output_dir
         os.makedirs(current_output_dir, exist_ok=True)
         filename = os.path.basename(input_path)
         output_filename = f"{os.path.splitext(filename)[0]}_trads.txt" if args.translation_only_output else filename
         output_path = os.path.join(current_output_dir, output_filename)
-
+        
         if args.resume and os.path.exists(output_path) and args.file_type != 'csv':
-            console.print(
-                f"⚠️  [yellow]Attenzione: Resume mode per '{args.file_type}' potrebbe sovrascrivere il file '{output_path}'.[/]")
+             console.print(f"⚠️  [yellow]Attenzione: Resume mode per '{args.file_type}' potrebbe sovrascrivere il file '{output_path}'.[/]")
         try:
-            if args.file_type == 'csv':
-                traduci_testo_csv(input_path, output_path, args)
-            elif args.file_type == 'json':
-                traduci_testo_json(input_path, output_path, args)
-            elif args.file_type == 'po':
-                traduci_testo_po(input_path, output_path, args)
-            elif args.file_type == 'xlsx':
-                traduci_testo_xlsx(input_path, output_path, args)
-            elif args.file_type == 'srt':
-                traduci_testo_srt(input_path, output_path, args)
-
+            if args.file_type == 'csv': traduci_testo_csv(input_path, output_path, args)
+            elif args.file_type == 'json': traduci_testo_json(input_path, output_path, args)
+            elif args.file_type == 'po': traduci_testo_po(input_path, output_path, args)
+            
             # La funzione `traduci_...` ritorna None se il file è stato saltato
             if os.path.exists(output_path):
                 total_files_translated += 1
                 if args.telegram:
-                    telegram_bot.send_telegram_notification(
-                        f"✅ *File Completato!*\n`{filename}` è stato tradotto e salvato.")
-
+                    telegram_bot.send_telegram_notification(f"✅ *File Completato!*\n`{filename}` è stato tradotto e salvato.")
+        
         except KeyboardInterrupt:
             raise
         except Exception as e:
             error_msg = f"Errore irreversibile durante l'elaborazione del file '{filename}': {e}"
             console.print(f"🛑 [red]{error_msg}[/]")
             write_to_log(f"ERRORE CRITICO FILE: {error_msg}. Il file verrà saltato.")
-
 
 def check_for_updates():
     try:
@@ -2419,203 +1781,37 @@ def check_for_updates():
         latest_version = version.parse(latest_version_str)
 
         if latest_version > current_version:
-            return str(latest_version)
+            update_message = Text.from_markup(
+                f"[bold]🚀 Nuova versione disponibile! ({latest_version_str})[/bold]\n\n"
+                f"La tua versione attuale ([bold red]{CURRENT_SCRIPT_VERSION}[/bold red]) è [bold red]DEPRECATA[/bold red] e non verrà più supportata.\n"
+                "Si consiglia vivamente di passare alla nuova versione che include un'interfaccia grafica (GUI).\n\n"
+                f"Scarica l'ultima versione da:\n[link=https://github.com/{GITHUB_REPO}]https://github.com/{GITHUB_REPO}[/link]"
+            )
+            console.print(Panel(update_message, title="[red]Versione Deprecata[/]", border_style="red", padding=(1, 2)))
+
+            # Pausa in attesa dell'azione dell'utente
+            console.input("\n[bold]Premi Invio per continuare comunque o premi CTRL+C per uscire e aggiornare.[/bold]")
+            console.print() # Aggiunge uno spazio per pulizia
         else:
-            return None
+            console.print("✅ La tua versione dello script è aggiornata.", style="dim")
 
+    except requests.exceptions.RequestException:
+        console.print("⚠️  Impossibile verificare la presenza di aggiornamenti (errore di rete).", style="yellow dim")
+    except KeyboardInterrupt:
+        # Gestisce l'uscita tramite CTRL+C in modo pulito
+        console.print("\n🛑 Esecuzione annullata dall'utente per procedere con l'aggiornamento. A presto!")
+        sys.exit()
     except Exception:
-        return None
-
-# --- FUNZIONI DI SUPPORTO PER LA GUI ---
-
-def fetch_available_models(api_key):
-    """Recupera la lista dei modelli Gemini disponibili."""
-    try:
-        genai.configure(api_key=api_key)
-        models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                models.append(m.name.replace("models/", ""))
-        return sorted(models, reverse=True)
-    except Exception as e:
-        return [f"Errore: {e}"]
-
-def fetch_ollama_models(host):
-    """Recupera la lista dei modelli Ollama disponibili."""
-    try:
-        url = f"{host}/api/tags"
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            return [m['name'] for m in data.get('models', [])]
-        return []
-    except Exception as e:
-        return []
-
-def generate_prompt_preview(args):
-    """Genera una preview del prompt per la GUI."""
-    dummy_text = "This is a sample text to translate."
-    # Simula la costruzione del prompt
-    prompt = f"Traduci da {args.source_lang} a {args.target_lang}.\n"
-    if args.game_name: prompt += f"Contesto: {args.game_name}\n"
-    if args.custom_prompt: prompt += f"Istruzioni: {args.custom_prompt}\n"
-    prompt += f"\nTesto:\n{dummy_text}"
-    return prompt
-
-def run_cache_extractor(src_dir, tgt_dir, fmt, src_col, tgt_col, enc, json_keys=None):
-    """Wrapper per lanciare l'estrattore cache dalla GUI."""
-    # Qui dovremmo importare cache_extractor o replicarne la logica.
-    # Per semplicità, lanciamo il processo come subprocess o importiamo se possibile.
-    # Dato che siamo nello stesso processo, meglio importare.
-    try:
-        import cache_extractor
-        # Costruiamo un oggetto args fittizio usando SimpleNamespace
-        args = types.SimpleNamespace()
-        args.source_dir = src_dir
-        args.target_dir = tgt_dir
-        args.file_type = fmt
-        args.encoding = enc
-        args.output_cache_file = CACHE_FILE_NAME
-        args.append = True
-        args.delimiter = ","
-        args.source_col = src_col
-        args.target_col = tgt_col
-        args.xlsx_source_col = "A" # Default
-        args.xlsx_target_col = "B" # Default
-        args.no_header = False
-        args.json_keys = json_keys
-        args.match_full_json_path = False
-        args.source_lang = "any"
-        args.target_lang = "any"
-        
-        cache = {}
-        if os.path.exists(CACHE_FILE_NAME):
-            with open(CACHE_FILE_NAME, 'r', encoding='utf-8') as f: cache = json.load(f)
-            
-        cache_extractor.process_files(args, cache)
-        
-        with open(CACHE_FILE_NAME, 'w', encoding='utf-8') as f:
-            json.dump(cache, f, ensure_ascii=False, indent=4)
-        write_to_log(f"Estrazione cache completata. {len(cache)} voci totali.")
-    except Exception as e:
-        write_to_log(f"Errore estrazione cache: {e}")
-
-def run_term_scanner(input_dir, fmt, enc):
-    """
-    Scansiona i file di input per trovare termini ricorrenti o nomi propri
-    che potrebbero essere candidati per il glossario.
-    """
-    if not os.path.isdir(input_dir):
-        return "Errore: Cartella di input non valida."
-    
-    # Inizializza AI se non fatto (per uso standalone)
-    if not model:
-        return "Errore: Modello AI non inizializzato. Configura prima l'API Key."
-
-    sample_texts = []
-    files_scanned = 0
-    
-    # Raccogli campioni di testo
-    for root, _, files in os.walk(input_dir):
-        for f in files:
-            if f.endswith(f".{fmt}"):
-                files_scanned += 1
-                fpath = os.path.join(root, f)
-                try:
-                    content = ""
-                    if fmt == 'csv':
-                        with open(fpath, 'r', encoding=enc) as fp:
-                            rows = list(csv.reader(fp))
-                            # Prendi un campione dalla colonna centrale (spesso testo)
-                            if len(rows) > 1: content = " ".join([r[min(len(r)-1, 3)] for r in rows[:5] if len(r)>0])
-                    elif fmt == 'json':
-                        with open(fpath, 'r', encoding=enc) as fp:
-                            content = str(json.load(fp))[:2000] # Primi 2k chars
-                    else:
-                        with open(fpath, 'r', encoding=enc, errors='ignore') as fp:
-                            content = fp.read()[:2000]
-                    
-                    if content: sample_texts.append(f"FILE: {f}\nCONTENT: {content[:500]}...")
-                except: pass
-                if len(sample_texts) >= 5: break # Max 5 file
-        if len(sample_texts) >= 5: break
-
-    if not sample_texts:
-        return "Nessun file o contenuto valido trovato per la scansione."
-
-    # Chiedi all'AI
-    prompt = (
-        "Analizza i seguenti frammenti di testo provenienti da file di localizzazione di un software/gioco.\n"
-        "Il tuo compito è identificare potenziali Nomi Propri, Luoghi, Oggetti specifici o Termini Tecnici che dovrebbero essere mantenuti coerenti.\n"
-        "Restituisci SOLO una lista CSV semplice: Termine, Categoria (es. 'Excalibur, Oggetto').\n\n"
-        + "\n---\n".join(sample_texts)
-    )
-
-    try:
-        write_to_log("Avvio scansione termini con AI...")
-        response = _perform_genai_api_call(prompt)
-        return f"--- TERMINI SUGGERITI ---\n{response}"
-    except Exception as e:
-        return f"Errore durante l'analisi AI: {e}"
-
-# --- ENTRY POINT PER LA GUI ---
-
-def run_core_process(args, log_queue, stop_event, pause_event, skip_event):
-    """
-    Funzione principale chiamata dalla GUI per avviare il processo.
-    Collega gli eventi della GUI alle variabili globali del Core.
-    """
-    global script_args, gui_log_queue, graceful_exit_requested, script_is_paused, user_command_skip_file, global_skip_event
-    global start_time, total_files_translated, total_entries_translated
-    
-    # Reset stato
-    script_args = args
-    gui_log_queue = log_queue
-    graceful_exit_requested = stop_event
-    script_is_paused = pause_event # Nota: nella GUI pause_event è set() quando running, clear() quando pausa.
-    global_skip_event = skip_event
-    
-    # Setup iniziale
-    start_time = time.time()
-    total_files_translated = 0
-    total_entries_translated = 0
-    
-    if args.enable_file_log: setup_log_file()
-    
-    write_to_log("--- Avvio Processo da GUI ---")
-    
-    # Init Telegram se richiesto
-    telegram_app = None
-    if args.telegram:
-        telegram_app = telegram_bot.start_bot(args)
-    
-    try:
-        initialize_api_keys_and_model()
-        load_persistent_cache()
-        load_glossary()
-        
-        # Loop principale
-        process_files_recursively(args)
-        
-    except Exception as e:
-        write_to_log(f"Errore fatale nel processo: {e}")
-        console.print_exception()
+        # Fallisce silenziosamente per altri errori
+        console.print("⚠️  Impossibile completare la verifica degli aggiornamenti.", style="yellow dim")
     finally:
-        save_persistent_cache(force=True)
-        show_stats()
-        if telegram_app: telegram_bot.stop_bot()
-        write_to_log("--- Processo Terminato ---")
+        console.print()
 
 
 if __name__ == "__main__":
     console.print(ALUMEN_ASCII_ART, style="bold cyan")
     console.print("Benvenuto in Alumen, traduttore automatico potenziato da Gemini.\n")
-    
-    # Check updates (CLI only)
-    new_ver = check_for_updates()
-    if new_ver:
-        console.print(f"🚀 Nuova versione disponibile: {new_ver}", style="bold green")
-
+    check_for_updates()
     args_parsed_main = get_script_args_updated()
 
     if not args_parsed_main.ollama_model and not check_internet_connection():
@@ -2637,11 +1833,10 @@ if __name__ == "__main__":
 
     telegram_app = None
     if args_parsed_main.telegram:
-        telegram_app = telegram_bot.start_bot(args_parsed_main)
+        telegram_app = telegram_bot.start_bot()
 
     initialize_api_keys_and_model()
     load_persistent_cache()
-    load_glossary()
 
     cmd_thread = None
     if args_parsed_main.interactive:
@@ -2656,14 +1851,13 @@ if __name__ == "__main__":
         write_to_log("INTERRUZIONE UTENTE: Rilevato Ctrl+C. Avvio chiusura controllata.")
     finally:
         if args_parsed_main.shutdown and not interrupted and telegram_app:
-            telegram_bot.send_telegram_notification(
-                "⚠️ *Spegnimento PC programmato.*\nIl computer si spegnerà tra 60 secondi dopo la chiusura dello script.")
+             telegram_bot.send_telegram_notification("⚠️ *Spegnimento PC programmato.*\nIl computer si spegnerà tra 60 secondi dopo la chiusura dello script.")
 
         if telegram_app:
             console.print("\n[telegram] Tentativo di chiusura della connessione Telegram...[/]")
             telegram_bot.stop_bot()
             console.print("[telegram] Connessione Telegram terminata.[/]")
-        save_persistent_cache(force=True)
+        save_persistent_cache()
         show_stats(title="📊 STATISTICHE FINALI DI ESECUZIONE")
         write_to_log(f"--- FINE Sessione Log: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
         if interrupted:
@@ -2672,8 +1866,7 @@ if __name__ == "__main__":
             console.print("\n[bold green]Lavoro completato. Script Alumen terminato.[/]")
             if args_parsed_main.shutdown:
                 console.print("\n[bold red]⚠️  ATTENZIONE: Spegnimento del computer richiesto.[/]")
-                console.print(
-                    "[bold red]Il sistema si spegnerà tra 60 secondi. Esegui 'shutdown /a' (Win) o 'shutdown -c' (Linux) per annullare.[/]")
+                console.print("[bold red]Il sistema si spegnerà tra 60 secondi. Esegui 'shutdown /a' (Win) o 'shutdown -c' (Linux) per annullare.[/]")
                 try:
                     if os.name == 'nt':
                         subprocess.run(["shutdown", "/s", "/t", "60"], check=True)

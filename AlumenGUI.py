@@ -5,29 +5,36 @@ import threading
 import queue
 import os
 import json
+import time
 import AlumenCore
 
-# --- STILI ---
-COLOR_BG_SIDEBAR = "#2c3e50"
-COLOR_BG_SIDEBAR_ACTIVE = "#3e5871"
-COLOR_BG_MAIN = "#f4f6f9"
-COLOR_BG_CARD = "#ffffff"
-COLOR_TEXT_HEADER = "#2c3e50"
-COLOR_TEXT_SUBHEADER = "#16a085"
-COLOR_TEXT_NORMAL = "#34495e"
-COLOR_TEXT_SIDEBAR = "#ecf0f1"
-COLOR_TEXT_PLACEHOLDER = "#95a5a6"
-COLOR_BTN_ACTION = "#27ae60"
-COLOR_BTN_WARN = "#f39c12"
-COLOR_BTN_DANGER = "#c0392b"
-COLOR_BTN_TOOL = "#8e44ad"
-COLOR_BORDER = "#e0e0e0"
+# --- THEME CONFIGURATION (Modern Flat) ---
+C_ACCENT = "#0078D7"          # Windows 11 Blue
+C_ACCENT_HOVER = "#1984D8"
+C_SIDEBAR_BG = "#202020"      # Deep Dark Grey
+C_SIDEBAR_BTN_ACTIVE = "#323232"
+C_MAIN_BG = "#F3F3F3"         # Soft Light Grey
+C_CARD_BG = "#FFFFFF"         # Pure White
+C_TEXT_MAIN = "#1A1A1A"
+C_TEXT_SEC = "#5F6368"
+C_TEXT_SIDEBAR = "#AAAAAA"
+C_TEXT_SIDEBAR_ACT = "#FFFFFF"
+C_BORDER = "#E0E0E0"
 
-FONT_HEADER_PAGE = ("Segoe UI", 22, "bold")
-FONT_HEADER_SECTION = ("Segoe UI", 11, "bold")
-FONT_NORMAL = ("Segoe UI", 10)
-FONT_SIDEBAR = ("Segoe UI", 11)
-FONT_STATS = ("Segoe UI", 12, "bold")
+# Semantic Colors
+C_SUCCESS = "#107C10"
+C_WARN = "#D83B01"
+C_ERR = "#A80000"
+
+# Fonts
+F_H1 = ("Segoe UI", 22, "bold")
+F_H2 = ("Segoe UI", 11, "bold")
+F_BODY = ("Segoe UI", 10)
+F_SMALL = ("Segoe UI", 9)
+F_MONO = ("Consolas", 10)
+F_ICON = ("Segoe UI Emoji", 12)
+F_SIDEBAR = ("Segoe UI", 11)
+F_STATS = ("Segoe UI", 14, "bold")
 
 class ToolTip:
     def __init__(self, widget, text):
@@ -45,8 +52,8 @@ class ToolTip:
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(tw, text=self.text, justify=tk.LEFT,
-                       background="#34495e", foreground="#ecf0f1",
-                       relief=tk.FLAT, borderwidth=0, font=("Segoe UI", 9), padx=8, pady=4)
+                       background="#2D2D30", foreground="#FFFFFF",
+                       relief=tk.SOLID, borderwidth=0, font=F_SMALL, padx=10, pady=6)
         label.pack()
     def hide_tip(self, event=None):
         if self.tipwindow: self.tipwindow.destroy(); self.tipwindow = None
@@ -63,12 +70,12 @@ class PlaceholderEntry(ttk.Entry):
         if str(self['state']) == 'disabled': return
         if not self.is_active:
             self.delete(0, tk.END)
-            self.config(foreground=COLOR_TEXT_NORMAL)
+            self.config(foreground=C_TEXT_MAIN)
             self.is_active = True
     def _foc_out(self, event):
         if not self.get():
             self.insert(0, self.placeholder)
-            self.config(foreground=COLOR_TEXT_PLACEHOLDER)
+            self.config(foreground=C_TEXT_SEC)
             self.is_active = False
         else:
             self.is_active = True
@@ -76,30 +83,55 @@ class PlaceholderEntry(ttk.Entry):
         return self.get() if self.is_active else ""
     def set_text(self, text):
         self.delete(0, tk.END)
-        self.config(foreground=COLOR_TEXT_NORMAL)
+        self.config(foreground=C_TEXT_MAIN)
         self.insert(0, text)
         self.is_active = True
+
+class ScrollableFrame(ttk.Frame):
+    def __init__(self, container, *args, **kwargs):
+        super().__init__(container, *args, **kwargs)
+        self.canvas = tk.Canvas(self, bg=C_MAIN_BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas, style='TFrame')
+        self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.scrollable_frame.bind('<Enter>', self._bind_mouse)
+        self.scrollable_frame.bind('<Leave>', self._unbind_mouse)
+    def _on_canvas_configure(self, event):
+        self.canvas.itemconfig(self.canvas_window, width=event.width)
+    def _bind_mouse(self, event):
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+    def _unbind_mouse(self, event):
+        self.canvas.unbind_all("<MouseWheel>")
+    def _on_mousewheel(self, event):
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
 class AlumenGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Alumen v2.2.1 - AI Translator")
-        self.root.geometry("1200x950")
-        self.root.configure(bg=COLOR_BG_MAIN)
+        self.root.title("Alumen v2.5.0 - AI Translation Suite")
+        self.root.geometry("1280x950")
+        self.root.configure(bg=C_MAIN_BG)
         
         self.log_queue = queue.Queue()
         self.stop_event = threading.Event()
         self.pause_event = threading.Event(); self.pause_event.set()
-        self.skip_api_event = threading.Event()
         self.skip_event = threading.Event()
         
         self.api_file_path = None
         self.current_args = None
         self.nav_buttons = {}
+        self.current_page = None
         self.is_running = False
+        self.is_initialized = False
         
         self._configure_styles()
         self._init_layout()
+        self.is_initialized = True
         
         if os.path.exists("api_key.txt"):
             self._load_api_file_internal("api_key.txt")
@@ -107,481 +139,773 @@ class AlumenGUI:
         self.root.after(100, self._poll_log_queue)
         self.root.after(1000, self._update_stats)
         self.root.after(2000, self._check_update_thread)
-        
-        # Trigger iniziale stati UI
         self.root.after(100, self._update_ui_states)
 
     def _configure_styles(self):
         style = ttk.Style()
         style.theme_use('clam')
-        style.configure('TFrame', background=COLOR_BG_MAIN)
-        style.configure('Card.TFrame', background=COLOR_BG_CARD)
-        style.configure('TLabel', background=COLOR_BG_MAIN, foreground=COLOR_TEXT_NORMAL, font=FONT_NORMAL)
-        style.configure('Card.TLabel', background=COLOR_BG_CARD, foreground=COLOR_TEXT_NORMAL, font=FONT_NORMAL)
-        style.configure('Card.TLabelframe', background=COLOR_BG_CARD, relief="solid", borderwidth=1, bordercolor=COLOR_BORDER)
-        style.configure('Card.TLabelframe.Label', background=COLOR_BG_CARD, foreground=COLOR_TEXT_SUBHEADER, font=FONT_HEADER_SECTION)
         
-        style.configure('TButton', font=("Segoe UI", 9), borderwidth=0, padding=6, background="#bdc3c7", foreground="#2c3e50")
-        style.map('TButton', background=[('active', '#aab7b8')])
+        # Base Styles
+        style.configure('TFrame', background=C_MAIN_BG)
+        style.configure('Card.TFrame', background=C_CARD_BG)
+        style.configure('TLabel', background=C_MAIN_BG, foreground=C_TEXT_MAIN, font=F_BODY)
+        style.configure('Card.TLabel', background=C_CARD_BG, foreground=C_TEXT_MAIN, font=F_BODY)
+        style.configure('CardHeader.TLabel', background=C_CARD_BG, foreground=C_ACCENT, font=F_H2)
         
-        style.configure('Action.TButton', background=COLOR_BTN_ACTION, foreground="white", font=("Segoe UI", 9, "bold"))
-        style.map('Action.TButton', background=[('active', "#2ecc71")])
+        # Buttons
+        style.configure('TButton', font=F_BODY, borderwidth=0, background="#E1E1E1", foreground=C_TEXT_MAIN)
+        style.map('TButton', background=[('active', '#D1D1D1'), ('disabled', '#F0F0F0')])
         
-        style.configure('Danger.TButton', background=COLOR_BTN_DANGER, foreground="white", font=("Segoe UI", 9, "bold"))
-        style.map('Danger.TButton', background=[('active', "#e74c3c")])
+        style.configure('Action.TButton', background=C_ACCENT, foreground="white", font=("Segoe UI", 10, "bold"))
+        style.map('Action.TButton', background=[('active', C_ACCENT_HOVER)])
         
-        style.configure('Warn.TButton', background=COLOR_BTN_WARN, foreground="white", font=("Segoe UI", 9, "bold"))
-        style.map('Warn.TButton', background=[('active', "#e67e22")])
+        style.configure('Danger.TButton', background=C_ERR, foreground="white", font=("Segoe UI", 10, "bold"))
+        style.map('Danger.TButton', background=[('active', "#800000")])
         
-        style.configure('Tool.TButton', background=COLOR_BTN_TOOL, foreground="white", font=("Segoe UI", 9, "bold"))
-        style.map('Tool.TButton', background=[('active', "#9b59b6")])
+        style.configure('Warn.TButton', background=C_WARN, foreground="white", font=("Segoe UI", 10, "bold"))
+        style.map('Warn.TButton', background=[('active', "#B03000")])
         
-        style.configure('TEntry', padding=5, relief="flat", borderwidth=1, bordercolor=COLOR_BORDER)
-        style.configure("Card.TCheckbutton", background=COLOR_BG_CARD, foreground=COLOR_TEXT_NORMAL, font=FONT_NORMAL)
+        # Inputs
+        style.configure('TEntry', padding=8, relief="flat", borderwidth=1, bordercolor=C_BORDER)
+        style.map('TEntry', bordercolor=[('focus', C_ACCENT)])
+        
+        style.configure('TCombobox', padding=8, relief="flat", borderwidth=1, bordercolor=C_BORDER)
+        style.map('TCombobox', fieldbackground=[('readonly', 'white')], selectbackground=[('readonly', C_ACCENT)])
+
+        # Checks & Radios
+        style.configure("Card.TCheckbutton", background=C_CARD_BG, foreground=C_TEXT_MAIN, font=F_BODY)
+        style.configure("Card.TRadiobutton", background=C_CARD_BG, foreground=C_TEXT_MAIN, font=F_BODY)
 
     def _init_layout(self):
-        self.sidebar = tk.Frame(self.root, bg=COLOR_BG_SIDEBAR, width=260)
+        # --- SIDEBAR ---
+        self.sidebar = tk.Frame(self.root, bg=C_SIDEBAR_BG, width=260)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
         
-        # Bottone Debug
-        self.btn_debug = tk.Button(self.sidebar, text="🔍", bg=COLOR_BG_SIDEBAR, fg="#576574", bd=0, font=("Segoe UI", 12), command=self._show_prompt_preview, cursor="hand2", activebackground=COLOR_BG_SIDEBAR, activeforeground="#576574")
-        self.btn_debug.place(x=220, y=680)
-        ToolTip(self.btn_debug, "Preview Prompt")
+        # Logo
+        f_logo = tk.Frame(self.sidebar, bg=C_SIDEBAR_BG, pady=40)
+        f_logo.pack(fill="x")
+        tk.Label(f_logo, text="ALUMEN", bg=C_SIDEBAR_BG, fg="white", font=("Segoe UI", 26, "bold")).pack()
+        tk.Label(f_logo, text="AI TRANSLATION SUITE", bg=C_SIDEBAR_BG, fg=C_ACCENT, font=("Segoe UI", 9, "bold", "italic")).pack()
         
-        tk.Label(self.sidebar, text="ALUMEN", bg=COLOR_BG_SIDEBAR, fg="white", font=("Segoe UI", 24, "bold")).pack(pady=(50, 5))
-        tk.Label(self.sidebar, text="AI TRANSLATION SUITE", bg=COLOR_BG_SIDEBAR, fg="#95a5a6", font=("Segoe UI", 9, "bold", "italic")).pack(pady=(0, 60))
+        # Navigation
+        f_nav = tk.Frame(self.sidebar, bg=C_SIDEBAR_BG)
+        f_nav.pack(fill="x", padx=0, pady=20)
         
-        menu_container = tk.Frame(self.sidebar, bg=COLOR_BG_SIDEBAR)
-        menu_container.pack(fill="x", padx=0)
+        self.nav_buttons['conf'] = self._make_nav_btn(f_nav, "⚙️  Configurazione", "conf")
+        self.nav_buttons['adv'] = self._make_nav_btn(f_nav, "🧠  Avanzate", "adv")
+        self.nav_buttons['api'] = self._make_nav_btn(f_nav, "🔑  Gestione API", "api") # Nuova scheda
+        self.nav_buttons['tools'] = self._make_nav_btn(f_nav, "🛠️  Strumenti", "tools")
+        self.nav_buttons['log'] = self._make_nav_btn(f_nav, "🚀  Esecuzione", "log")
         
-        self.nav_buttons['conf'] = self._make_sidebar_btn(menu_container, "⚙️   Configurazione", "conf")
-        self.nav_buttons['adv'] = self._make_sidebar_btn(menu_container, "🧠   Avanzate", "adv")
-        self.nav_buttons['tools'] = self._make_sidebar_btn(menu_container, "🛠️   Strumenti", "tools")
-        self.nav_buttons['log'] = self._make_sidebar_btn(menu_container, "🚀   Log & Esecuzione", "log")
+        # Footer
+        tk.Label(self.sidebar, text=f"Core v{AlumenCore.CURRENT_SCRIPT_VERSION}", bg=C_SIDEBAR_BG, fg="#666666", font=F_SMALL).pack(side="bottom", pady=15)
         
-        tk.Label(self.sidebar, text=f"v{AlumenCore.CURRENT_SCRIPT_VERSION}", bg=COLOR_BG_SIDEBAR, fg="#576574", font=("Segoe UI", 8)).pack(side="bottom", pady=20)
-        
-        self.main_area = tk.Frame(self.root, bg=COLOR_BG_MAIN)
+        # --- MAIN CONTENT ---
+        self.main_area = tk.Frame(self.root, bg=C_MAIN_BG)
         self.main_area.pack(side="right", fill="both", expand=True)
         self.main_area.grid_rowconfigure(0, weight=1)
         self.main_area.grid_columnconfigure(0, weight=1)
         
         self.frames = {}
-        for page in ["conf", "adv", "tools", "log"]:
-            fr = tk.Frame(self.main_area, bg=COLOR_BG_MAIN)
+        for page in ["conf", "adv", "api", "tools", "log"]:
+            fr = tk.Frame(self.main_area, bg=C_MAIN_BG)
             fr.grid(row=0, column=0, sticky="nsew")
             self.frames[page] = fr
             
         self._build_page_conf(self.frames["conf"])
         self._build_page_adv(self.frames["adv"])
+        self._build_page_api(self.frames["api"]) # Nuova funzione
         self._build_page_tools(self.frames["tools"])
         self._build_page_log(self.frames["log"])
         
+        # Status Bar
+        self.status_var = tk.StringVar(value="Pronto")
+        self.status_bar = tk.Frame(self.main_area, bg=C_ACCENT, height=30)
+        self.status_bar.place(relx=0, rely=1, anchor="sw", relwidth=1)
+        tk.Label(self.status_bar, textvariable=self.status_var, bg=C_ACCENT, fg="white", font=F_SMALL, padx=10).pack(side="left")
+        
         self._show_frame("conf")
 
-    def _make_sidebar_btn(self, parent, text, page_key):
-        btn = tk.Button(parent, text=text, bg=COLOR_BG_SIDEBAR, fg=COLOR_TEXT_SIDEBAR, font=FONT_SIDEBAR, bd=0, relief=tk.FLAT, padx=30, pady=15, anchor="w", cursor="hand2", activebackground=COLOR_BG_SIDEBAR_ACTIVE, activeforeground="white", command=lambda: self._show_frame(page_key))
+    def _make_nav_btn(self, parent, text, page_key):
+        btn = tk.Button(parent, text=text, bg=C_SIDEBAR_BG, fg=C_TEXT_SIDEBAR, font=F_SIDEBAR, 
+                        bd=0, relief=tk.FLAT, padx=10, pady=15, anchor="center", cursor="hand2",
+                        activebackground=C_SIDEBAR_BTN_ACTIVE, activeforeground="white",
+                        command=lambda: self._show_frame(page_key))
         btn.pack(fill="x", pady=1)
         return btn
 
     def _show_frame(self, page_name):
+        self.current_page = page_name
         self.frames[page_name].tkraise()
         for key, btn in self.nav_buttons.items():
-            if key == page_name: btn.configure(bg=COLOR_BG_SIDEBAR_ACTIVE, fg="white", font=("Segoe UI", 11, "bold"))
-            else: btn.configure(bg=COLOR_BG_SIDEBAR, fg=COLOR_TEXT_SIDEBAR, font=("Segoe UI", 11, "normal"))
+            if key == page_name:
+                btn.configure(bg=C_SIDEBAR_BTN_ACTIVE, fg=C_TEXT_SIDEBAR_ACT, font=("Segoe UI", 11, "bold"))
+            else:
+                btn.configure(bg=C_SIDEBAR_BG, fg=C_TEXT_SIDEBAR, font=("Segoe UI", 11, "normal"))
+        
+        # Aggiorna la lista API se si apre la scheda API
+        if page_name == "api":
+            self._refresh_api_list()
 
-    def _create_card(self, parent, title):
-        wrapper = ttk.Frame(parent)
-        wrapper.pack(fill="x", pady=(0, 20))
-        lf = ttk.LabelFrame(wrapper, text=f"  {title}  ", style='Card.TLabelframe', padding=20)
-        lf.pack(fill="x")
-        return lf
+    def _create_card(self, parent, title, icon=""):
+        # Card Wrapper (Shadow effect via border)
+        card = tk.Frame(parent, bg=C_CARD_BG, highlightbackground=C_BORDER, highlightthickness=1)
+        card.pack(fill="x", pady=(0, 20), padx=5)
+        
+        # Accent Strip
+        tk.Frame(card, bg=C_ACCENT, height=3).pack(fill="x")
+        
+        # Header
+        header = tk.Frame(card, bg=C_CARD_BG, pady=15, padx=20)
+        header.pack(fill="x")
+        tk.Label(header, text=f"{icon}  {title}", bg=C_CARD_BG, fg=C_TEXT_MAIN, font=F_H2).pack(side="left")
+        
+        # Content
+        content = tk.Frame(card, bg=C_CARD_BG, padx=20)
+        content.pack(fill="both", expand=True, pady=(0, 20))
+        return content
 
-    # --- PAGINA CONFIGURAZIONE ---
+    def _make_grid_frame(self, parent, r, c):
+        f = tk.Frame(parent, bg=C_CARD_BG)
+        f.grid(row=r, column=c, padx=15, pady=8, sticky="ew")
+        parent.grid_columnconfigure(c, weight=1)
+        return f
+
+    # --- PAGE 1: CONFIGURAZIONE ---
     def _build_page_conf(self, parent):
-        container = ttk.Frame(parent, padding=40)
+        sf = ScrollableFrame(parent)
+        sf.pack(fill="both", expand=True)
+        container = ttk.Frame(sf.scrollable_frame, padding=40)
         container.pack(fill="both", expand=True)
-        tk.Label(container, text="Configurazione Principale", bg=COLOR_BG_MAIN, fg=COLOR_TEXT_HEADER, font=FONT_HEADER_PAGE).pack(anchor="w", pady=(0, 25))
         
-        # API
-        lf_api = self._create_card(container, "Connessione Google Gemini")
-        f_k = ttk.Frame(lf_api, style='Card.TFrame')
-        f_k.pack(fill="x", pady=(0, 15))
-        ttk.Label(f_k, text="API Keys:", style='Card.TLabel', width=16).pack(side="left")
-        self.ent_api = ttk.Entry(f_k)
-        self.ent_api.pack(side="left", fill="x", expand=True, padx=10)
+        tk.Label(container, text="Configurazione Progetto", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
         
-        self.f_file_loaded = ttk.Frame(f_k, style='Card.TFrame')
-        self.lbl_file_loaded = ttk.Label(self.f_file_loaded, text="", foreground=COLOR_BTN_ACTION, font=("Segoe UI", 9, "bold"), style='Card.TLabel')
-        self.lbl_file_loaded.pack(side="left", padx=5)
-        # Icona cestino standard
-        btn_clear_api = ttk.Button(self.f_file_loaded, text="🗑", width=3, command=self._clear_api_file)
-        btn_clear_api.pack(side="left", padx=5)
-        ToolTip(btn_clear_api, "Rimuovi il file API e torna all'inserimento manuale.")
+        # Init vars
+        self.var_ai_provider = tk.StringVar(value="gemini")
+        self.var_ollama_enabled = tk.BooleanVar(value=False)
+
+        # CARD: AI ENGINE
+        c_ai = self._create_card(container, "Motore di Traduzione", "🧠")
         
-        self.btn_load_file = ttk.Button(f_k, text="📂 Carica .txt", command=self._load_api_file)
-        self.btn_load_file.pack(side="right")
-        ToolTip(self.btn_load_file, "Carica una o più API key da un file .txt (una per riga).")
+        f_sel = tk.Frame(c_ai, bg=C_CARD_BG)
+        f_sel.pack(fill="x", pady=(0, 15))
+        ttk.Radiobutton(f_sel, text="Google Gemini (Cloud)", variable=self.var_ai_provider, value="gemini", style="Card.TRadiobutton", command=self._toggle_ai_provider).pack(side="left", padx=(0, 20))
+        ttk.Radiobutton(f_sel, text="Ollama (Locale)", variable=self.var_ai_provider, value="ollama", style="Card.TRadiobutton", command=self._toggle_ai_provider).pack(side="left", padx=10)
+
+        # Gemini Panel
+        self.f_gemini = tk.Frame(c_ai, bg=C_CARD_BG)
+        self.f_gemini.pack(fill="x")
         
-        f_m = ttk.Frame(lf_api, style='Card.TFrame')
+        f_k = tk.Frame(self.f_gemini, bg=C_CARD_BG)
+        f_k.pack(fill="x", pady=(0, 10))
+        ttk.Label(f_k, text="API Key", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        
+        f_k_in = tk.Frame(f_k, bg=C_CARD_BG)
+        f_k_in.pack(fill="x", pady=(5,0))
+        self.ent_api = ttk.Entry(f_k_in)
+        self.ent_api.pack(side="left", fill="x", expand=True)
+        ToolTip(self.ent_api, "Inserisci qui la tua API Key di Google Gemini.")
+        
+        self.f_file_loaded = tk.Frame(f_k_in, bg=C_CARD_BG)
+        self.lbl_file_loaded = ttk.Label(self.f_file_loaded, text="", foreground=C_SUCCESS, font=("Segoe UI", 9, "bold"), style='Card.TLabel')
+        self.lbl_file_loaded.pack(side="left", padx=10)
+        ttk.Button(self.f_file_loaded, text="✕", width=3, command=self._clear_api_file).pack(side="left")
+        
+        ttk.Button(f_k_in, text="📂 Load .txt", command=self._load_api_file).pack(side="right", padx=(10,0))
+        
+        f_m = tk.Frame(self.f_gemini, bg=C_CARD_BG)
         f_m.pack(fill="x")
-        ttk.Label(f_m, text="Modello AI:", style='Card.TLabel', width=16).pack(side="left")
-        self.cmb_model = ttk.Combobox(f_m, state="readonly")
+        ttk.Label(f_m, text="Modello", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        f_m_in = tk.Frame(f_m, bg=C_CARD_BG)
+        f_m_in.pack(fill="x", pady=(5,0))
+        self.cmb_model = ttk.Combobox(f_m_in, state="readonly")
         self.cmb_model['values'] = ("gemini-2.0-flash [Default]",)
         self.cmb_model.current(0)
-        self.cmb_model.pack(side="left", fill="x", expand=True, padx=10)
-        btn_refresh_models = ttk.Button(f_m, text="🔄 Aggiorna", command=self._refresh_models_auto)
-        btn_refresh_models.pack(side="right")
-        ToolTip(btn_refresh_models, "Recupera la lista dei modelli AI disponibili usando la prima API key.")
+        self.cmb_model.pack(side="left", fill="x", expand=True)
+        ToolTip(self.cmb_model, "Seleziona il modello AI da utilizzare.")
+        ttk.Button(f_m_in, text="🔄", width=4, command=self._refresh_models_auto).pack(side="right", padx=(10,0))
 
-        # FILE INPUT/OUTPUT
-        lf_file = self._create_card(container, "File Input / Output")
-        f_in = ttk.Frame(lf_file, style='Card.TFrame')
+        # Ollama Panel
+        self.f_ollama = tk.Frame(c_ai, bg=C_CARD_BG)
+        
+        f_oh = tk.Frame(self.f_ollama, bg=C_CARD_BG)
+        f_oh.pack(fill="x", pady=(0, 10))
+        ttk.Label(f_oh, text="Host URL", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_ollama_host = ttk.Entry(f_oh)
+        self.ent_ollama_host.insert(0, AlumenCore.DEFAULT_OLLAMA_HOST)
+        self.ent_ollama_host.pack(fill="x", pady=(5,0))
+        ToolTip(self.ent_ollama_host, "Indirizzo del server Ollama (default: http://localhost:11434).")
+        
+        f_om = tk.Frame(self.f_ollama, bg=C_CARD_BG)
+        f_om.pack(fill="x")
+        ttk.Label(f_om, text="Modello Locale", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        f_om_in = tk.Frame(f_om, bg=C_CARD_BG)
+        f_om_in.pack(fill="x", pady=(5,0))
+        self.cmb_ollama_model = ttk.Combobox(f_om_in, state="readonly")
+        self.cmb_ollama_model.pack(side="left", fill="x", expand=True)
+        ToolTip(self.cmb_ollama_model, "Seleziona il modello Ollama installato.")
+        ttk.Button(f_om_in, text="🔄", width=4, command=self._refresh_ollama_models).pack(side="right", padx=(10,0))
+
+        # CARD: TASK
+        c_task = self._create_card(container, "Parametri Traduzione", "🌍")
+        
+        f_lng = tk.Frame(c_task, bg=C_CARD_BG)
+        f_lng.pack(fill="x", pady=(0, 15))
+        
+        f_l1 = tk.Frame(f_lng, bg=C_CARD_BG)
+        f_l1.pack(side="left", fill="x", expand=True)
+        ttk.Label(f_l1, text="Lingua Sorgente", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_src = ttk.Entry(f_l1)
+        self.ent_src.insert(0, "inglese")
+        self.ent_src.pack(fill="x", pady=(5,0))
+        ToolTip(self.ent_src, "Lingua originale del testo (es. inglese, giapponese).")
+        
+        tk.Label(f_lng, text="➜", bg=C_CARD_BG, fg=C_ACCENT, font=("Segoe UI", 14)).pack(side="left", padx=20, pady=(15,0))
+        
+        f_l2 = tk.Frame(f_lng, bg=C_CARD_BG)
+        f_l2.pack(side="left", fill="x", expand=True)
+        ttk.Label(f_l2, text="Lingua Target", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_tgt = ttk.Entry(f_l2)
+        self.ent_tgt.insert(0, "italiano")
+        self.ent_tgt.pack(fill="x", pady=(5,0))
+        ToolTip(self.ent_tgt, "Lingua in cui tradurre il testo.")
+
+        ttk.Label(c_task, text="Contesto Gioco / Progetto", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w", pady=(10, 0))
+        self.ent_gamename = PlaceholderEntry(c_task, "Es. 'The Witcher 3' o 'App Gestionale'")
+        self.ent_gamename.pack(fill="x", pady=(5,0))
+        ToolTip(self.ent_gamename, "Nome del progetto per dare contesto all'AI e migliorare la coerenza.")
+
+        # CARD: FILES
+        c_file = self._create_card(container, "Gestione File", "📂")
+        
+        # Input
+        f_in = tk.Frame(c_file, bg=C_CARD_BG)
         f_in.pack(fill="x", pady=(0, 10))
-        ttk.Label(f_in, text="Cartella Input:", width=16, style='Card.TLabel').pack(side="left")
-        self.ent_input = ttk.Entry(f_in)
+        ttk.Label(f_in, text="Cartella Input", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        f_in_row = tk.Frame(f_in, bg=C_CARD_BG)
+        f_in_row.pack(fill="x", pady=(5,0))
+        self.ent_input = ttk.Entry(f_in_row)
         self.ent_input.insert(0, "input")
-        self.ent_input.pack(side="left", fill="x", expand=True, padx=10)
-        btn_browse_in = ttk.Button(f_in, text="📂", width=4, command=lambda: self._browse_folder(self.ent_input, is_input=True))
-        btn_browse_in.pack(side="right")
-        ToolTip(btn_browse_in, "Sfoglia cartella")
+        self.ent_input.pack(side="left", fill="x", expand=True)
+        ttk.Button(f_in_row, text="Sfoglia", command=lambda: self._browse_folder(self.ent_input, is_input=True)).pack(side="right", padx=(10,0))
+        ToolTip(self.ent_input, "Cartella contenente i file da tradurre.")
         
-        f_out = ttk.Frame(lf_file, style='Card.TFrame')
+        # Output
+        f_out = tk.Frame(c_file, bg=C_CARD_BG)
         f_out.pack(fill="x", pady=(0, 15))
-        ttk.Label(f_out, text="Cartella Output:", width=16, style='Card.TLabel').pack(side="left")
-        self.ent_output = ttk.Entry(f_out)
+        ttk.Label(f_out, text="Cartella Output", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        f_out_row = tk.Frame(f_out, bg=C_CARD_BG)
+        f_out_row.pack(fill="x", pady=(5,0))
+        self.ent_output = ttk.Entry(f_out_row)
         self.ent_output.insert(0, "output")
-        self.ent_output.pack(side="left", fill="x", expand=True, padx=10)
-        btn_browse_out = ttk.Button(f_out, text="📂", width=4, command=lambda: self._browse_folder(self.ent_output))
-        btn_browse_out.pack(side="right")
-        ToolTip(btn_browse_out, "Sfoglia cartella")
+        self.ent_output.pack(side="left", fill="x", expand=True)
+        ttk.Button(f_out_row, text="Sfoglia", command=lambda: self._browse_folder(self.ent_output)).pack(side="right", padx=(10,0))
+        ToolTip(self.ent_output, "Cartella dove verranno salvati i file tradotti.")
         
-        f_opt = ttk.Frame(lf_file, style='Card.TFrame')
-        f_opt.pack(fill="x", pady=(5, 10))
-        ttk.Label(f_opt, text="Formato:", style='Card.TLabel', width=16).pack(side="left")
-        self.cmb_fmt = ttk.Combobox(f_opt, values=["csv", "json", "xlsx", "po", "srt"], width=8, state="readonly")
+        # Format
+        f_opt = tk.Frame(c_file, bg=C_CARD_BG)
+        f_opt.pack(fill="x")
+        
+        f_fmt = tk.Frame(f_opt, bg=C_CARD_BG)
+        f_fmt.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        ttk.Label(f_fmt, text="Formato File", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.cmb_fmt = ttk.Combobox(f_fmt, values=["csv", "json", "xlsx", "po", "srt"], width=10, state="readonly")
         self.cmb_fmt.current(0)
         self.cmb_fmt.bind("<<ComboboxSelected>>", self._update_ui_states)
-        self.cmb_fmt.pack(side="left", padx=(10, 30))
-        ttk.Label(f_opt, text="Encoding:", style='Card.TLabel').pack(side="left")
-        self.ent_encoding = PlaceholderEntry(f_opt, "utf-8", width=8)
-        self.ent_encoding.pack(side="left", padx=5)
-
-        f_lng = ttk.Frame(lf_file, style='Card.TFrame')
-        f_lng.pack(fill="x")
-        ttk.Label(f_lng, text="Da:", style='Card.TLabel', width=16).pack(side="left")
-        self.ent_src = ttk.Entry(f_lng, width=15)
-        self.ent_src.insert(0, "inglese")
-        self.ent_src.pack(side="left", padx=(10, 20))
-        ttk.Label(f_lng, text="A:", style='Card.TLabel').pack(side="left")
-        self.ent_tgt = ttk.Entry(f_lng, width=15)
-        self.ent_tgt.insert(0, "italiano")
-        self.ent_tgt.pack(side="left", padx=10)
+        self.cmb_fmt.pack(fill="x", pady=(5,0))
+        ToolTip(self.cmb_fmt, "Seleziona il formato dei file da elaborare.")
         
-        f_game = ttk.Frame(lf_file, style='Card.TFrame')
-        f_game.pack(fill="x", pady=(10,0))
-        ttk.Label(f_game, text="Nome Gioco:", style='Card.TLabel', width=16).pack(side="left")
-        self.ent_gamename = PlaceholderEntry(f_game, "un videogioco generico")
-        self.ent_gamename.pack(side="left", fill="x", expand=True, padx=10)
+        f_enc = tk.Frame(f_opt, bg=C_CARD_BG)
+        f_enc.pack(side="left", fill="x", expand=True)
+        ttk.Label(f_enc, text="Encoding", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_encoding = PlaceholderEntry(f_enc, "utf-8", width=10)
+        self.ent_encoding.pack(fill="x", pady=(5,0))
+        ToolTip(self.ent_encoding, "Codifica dei file (es. utf-8, cp1252).")
 
-        # TELEGRAM CONFIG
-        lf_tg = self._create_card(container, "Configurazione Telegram (Opzionale)")
+        # CARD: TELEGRAM
+        c_tg = self._create_card(container, "Notifiche Telegram", "📢")
         self.var_tg_enabled = tk.BooleanVar(value=False)
-        cb_tg = ttk.Checkbutton(lf_tg, text="Abilita Telegram", variable=self.var_tg_enabled, style="Card.TCheckbutton", command=self._toggle_telegram_ui)
-        cb_tg.pack(anchor="w", padx=5, pady=(0, 10))
-        f_tg1 = ttk.Frame(lf_tg, style='Card.TFrame')
-        f_tg1.pack(fill="x", pady=(0, 10))
-        ttk.Label(f_tg1, text="Bot Token:", width=16, style='Card.TLabel').pack(side="left")
+        cb_tg = ttk.Checkbutton(c_tg, text="Abilita Notifiche", variable=self.var_tg_enabled, style="Card.TCheckbutton", command=self._toggle_telegram_ui)
+        cb_tg.pack(anchor="w", pady=(0, 10))
+        ToolTip(cb_tg, "Abilita l'invio di log e stato via Telegram.")
+        
+        f_tg = tk.Frame(c_tg, bg=C_CARD_BG)
+        f_tg.pack(fill="x")
+        
+        f_tg1 = tk.Frame(f_tg, bg=C_CARD_BG)
+        f_tg1.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        ttk.Label(f_tg1, text="Bot Token", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_tg_token = ttk.Entry(f_tg1)
-        self.ent_tg_token.pack(side="left", fill="x", expand=True, padx=10)
-        f_tg2 = ttk.Frame(lf_tg, style='Card.TFrame')
-        f_tg2.pack(fill="x", pady=(0, 15))
-        ttk.Label(f_tg2, text="Chat ID:", width=16, style='Card.TLabel').pack(side="left")
+        self.ent_tg_token.pack(fill="x", pady=(5,0))
+        ToolTip(self.ent_tg_token, "Token del bot Telegram (da BotFather).")
+        
+        f_tg2 = tk.Frame(f_tg, bg=C_CARD_BG)
+        f_tg2.pack(side="left", fill="x", expand=True)
+        ttk.Label(f_tg2, text="Chat ID", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_tg_chatid = ttk.Entry(f_tg2)
-        self.ent_tg_chatid.pack(side="left", fill="x", expand=True, padx=10)
-        self.btn_tg_save = ttk.Button(f_tg2, text="💾 Salva Config Telegram", style='Action.TButton', command=self._save_telegram_config)
-        self.btn_tg_save.pack(side="right")
-        ToolTip(self.btn_tg_save, "Salva il token e il chat ID in 'telegram_config.json' per caricarli automaticamente.")
+        self.ent_tg_chatid.pack(fill="x", pady=(5,0))
+        ToolTip(self.ent_tg_chatid, "ID della chat o del canale dove ricevere le notifiche.")
         
-        self._toggle_telegram_ui() # Applica stato iniziale
+        self.btn_tg_save = ttk.Button(f_tg, text="💾", width=4, command=self._save_telegram_config)
+        self.btn_tg_save.pack(side="left", padx=(10,0), pady=(20,0))
 
-    # --- PAGINA AVANZATE ---
+        self._toggle_ai_provider()
+
+    # --- PAGE 2: AVANZATE ---
     def _build_page_adv(self, parent):
-        container = ttk.Frame(parent, padding=40)
+        sf = ScrollableFrame(parent)
+        sf.pack(fill="both", expand=True)
+        container = ttk.Frame(sf.scrollable_frame, padding=40)
         container.pack(fill="both", expand=True)
-        tk.Label(container, text="Opzioni Avanzate", bg=COLOR_BG_MAIN, fg=COLOR_TEXT_HEADER, font=FONT_HEADER_PAGE).pack(anchor="w", pady=(0, 25))
         
-        # CARD 1: FORMATO
-        lf_spec = self._create_card(container, "Parametri CSV & Excel")
-        f_csv = ttk.Frame(lf_spec, style='Card.TFrame')
+        tk.Label(container, text="Impostazioni Avanzate", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
+        
+        # CARD: FORMATO
+        c_spec = self._create_card(container, "Specifiche Formato", "⚙️")
+        
+        # CSV
+        f_csv = tk.Frame(c_spec, bg=C_CARD_BG)
         f_csv.pack(fill="x", pady=(0, 10))
-        ttk.Label(f_csv, text="Delimitatore:", style='Card.TLabel').pack(side="left")
-        self.ent_delim = PlaceholderEntry(f_csv, ",", width=5)
-        self.ent_delim.pack(side="left", padx=(5, 20))
-        ttk.Label(f_csv, text="Col. Input (0=A):", style='Card.TLabel').pack(side="left")
-        self.ent_col = PlaceholderEntry(f_csv, "3", width=5)
-        self.ent_col.pack(side="left", padx=(5, 20))
-        ttk.Label(f_csv, text="Col. Output:", style='Card.TLabel').pack(side="left")
-        self.ent_col_out = PlaceholderEntry(f_csv, "3", width=5)
-        self.ent_col_out.pack(side="left", padx=(5, 20))
-        ttk.Label(f_csv, text="Max Cols:", style='Card.TLabel').pack(side="left")
-        self.ent_maxcols = PlaceholderEntry(f_csv, "None", width=5)
-        self.ent_maxcols.pack(side="left", padx=5)
         
-        # CARD 2: JSON
-        lf_json = self._create_card(container, "Parametri JSON")
-        f_j1 = ttk.Frame(lf_json, style='Card.TFrame')
-        f_j1.pack(fill="x", pady=5)
-        ttk.Label(f_j1, text="JSON Keys:", style='Card.TLabel', width=10).pack(side="left")
-        self.ent_jkeys = PlaceholderEntry(f_j1, "es. title, description")
-        self.ent_jkeys.pack(side="left", fill="x", expand=True, padx=5)
-        self.var_jmatch = tk.BooleanVar(value=False)
-        ttk.Checkbutton(f_j1, text="Match Full Path", variable=self.var_jmatch, style="Card.TCheckbutton").pack(side="right")
+        # Grid Layout 2x2 for CSV
+        f_00 = self._make_grid_frame(f_csv, 0, 0)
+        ttk.Label(f_00, text="Delimitatore", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_delim = PlaceholderEntry(f_00, ",", width=5)
+        self.ent_delim.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_delim, "Carattere separatore per CSV (es. , o ;).")
 
-        # CARD 3: CONTESTO
-        lf_ctx = self._create_card(container, "Contesto & Prompt")
-        f_pr = ttk.Frame(lf_ctx, style='Card.TFrame')
-        f_pr.pack(fill="x", pady=5)
-        ttk.Label(f_pr, text="Custom Prompt:", style='Card.TLabel', width=15).pack(side="left")
-        self.ent_prompt = PlaceholderEntry(f_pr, "Istruzioni aggiuntive per l'AI")
-        self.ent_prompt.pack(side="left", fill="x", expand=True, padx=5)
-        f_pr2 = ttk.Frame(lf_ctx, style='Card.TFrame')
-        f_pr2.pack(fill="x", pady=5)
-        ttk.Label(f_pr2, text="Prompt Context:", style='Card.TLabel', width=15).pack(side="left")
-        self.ent_pctx = PlaceholderEntry(f_pr2, "Contesto extra fisso")
-        self.ent_pctx.pack(side="left", fill="x", expand=True, padx=5)
-        f_chk_ctx = ttk.Frame(lf_ctx, style='Card.TFrame')
-        f_chk_ctx.pack(fill="x", pady=5)
+        f_01 = self._make_grid_frame(f_csv, 0, 1)
+        ttk.Label(f_01, text="Col. Input (0=A)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_col = PlaceholderEntry(f_01, "3", width=5)
+        self.ent_col.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_col, "Indice della colonna contenente il testo originale.")
+
+        f_10 = self._make_grid_frame(f_csv, 1, 0)
+        ttk.Label(f_10, text="Col. Output", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_col_out = PlaceholderEntry(f_10, "3", width=5)
+        self.ent_col_out.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_col_out, "Indice della colonna dove scrivere la traduzione.")
+
+        f_11 = self._make_grid_frame(f_csv, 1, 1)
+        ttk.Label(f_11, text="Max Cols", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_maxcols = PlaceholderEntry(f_11, "None", width=5)
+        self.ent_maxcols.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_maxcols, "Ignora righe con più di N colonne (utile per file corrotti).")
+
+        ttk.Separator(c_spec, orient="horizontal").pack(fill="x", pady=15)
+
+        # JSON
+        f_json = tk.Frame(c_spec, bg=C_CARD_BG)
+        f_json.pack(fill="x")
+        f_j_in = tk.Frame(f_json, bg=C_CARD_BG)
+        f_j_in.pack(side="left", fill="x", expand=True)
+        ttk.Label(f_j_in, text="JSON Keys (es. title, desc)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_jkeys = PlaceholderEntry(f_j_in, "title, description")
+        self.ent_jkeys.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_jkeys, "Lista di chiavi JSON da tradurre, separate da virgola.")
+        
+        self.var_jmatch = tk.BooleanVar(value=False)
+        cb_j = ttk.Checkbutton(f_json, text="Match Full Path", variable=self.var_jmatch, style="Card.TCheckbutton")
+        cb_j.pack(side="left", padx=20, pady=(15,0))
+        ToolTip(cb_j, "Se attivo, cerca la chiave includendo il percorso completo (es. items.sword.name).")
+
+        ttk.Separator(c_spec, orient="horizontal").pack(fill="x", pady=15)
+
+        # EXCEL (XLSX)
+        f_xlsx = tk.Frame(c_spec, bg=C_CARD_BG)
+        f_xlsx.pack(fill="x")
+        
+        f_x1 = tk.Frame(f_xlsx, bg=C_CARD_BG)
+        f_x1.pack(side="left", fill="x", expand=True)
+        ttk.Label(f_x1, text="Col. Origine (es. A)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_xlsx_src = PlaceholderEntry(f_x1, "A", width=5)
+        self.ent_xlsx_src.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_xlsx_src, "Lettera della colonna Excel con il testo originale.")
+
+        f_x2 = tk.Frame(f_xlsx, bg=C_CARD_BG)
+        f_x2.pack(side="left", fill="x", expand=True, padx=(20, 0))
+        ttk.Label(f_x2, text="Col. Destinazione (es. B)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_xlsx_tgt = PlaceholderEntry(f_x2, "B", width=5)
+        self.ent_xlsx_tgt.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_xlsx_tgt, "Lettera della colonna Excel dove scrivere la traduzione.")
+
+        # CARD: PROMPT
+        c_ctx = self._create_card(container, "Prompt Engineering", "📝")
+        
+        ttk.Label(c_ctx, text="Custom Prompt (Istruzioni Extra)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_prompt = PlaceholderEntry(c_ctx, "Es. 'Usa un tono medievale', 'Non tradurre i nomi propri'")
+        self.ent_prompt.pack(fill="x", pady=(5, 15))
+        ToolTip(self.ent_prompt, "Istruzioni aggiuntive per guidare lo stile dell'AI.")
+        
+        ttk.Label(c_ctx, text="Contesto Fisso (Lore/Trama)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_pctx = PlaceholderEntry(c_ctx, "Es. 'Il protagonista è un cavaliere...'")
+        self.ent_pctx.pack(fill="x", pady=(5, 15))
+        ToolTip(self.ent_pctx, "Informazioni di contesto fisse inviate con ogni richiesta.")
+        
+        f_chk_ctx = tk.Frame(c_ctx, bg=C_CARD_BG)
+        f_chk_ctx.pack(fill="x")
         self.var_file_ctx = tk.BooleanVar(value=False)
         self.var_full_sample = tk.BooleanVar(value=False)
-        self.cb_file_ctx = ttk.Checkbutton(f_chk_ctx, text="Enable File Context (Analisi Preliminare)", variable=self.var_file_ctx, style="Card.TCheckbutton", command=self._update_ui_states)
-        self.cb_file_ctx.pack(side="left", padx=(0,20))
-        ToolTip(self.cb_file_ctx, "Analizza le prime frasi di ogni file per generare un contesto dinamico per l'AI.")
-        self.cb_full_sample = ttk.Checkbutton(f_chk_ctx, text="Full Context Sample (Analisi Completa)", variable=self.var_full_sample, style="Card.TCheckbutton")
+        cb_fc = ttk.Checkbutton(f_chk_ctx, text="Analisi Preliminare File (Auto-Context)", variable=self.var_file_ctx, style="Card.TCheckbutton", command=self._update_ui_states)
+        cb_fc.pack(side="left", padx=(0,20))
+        ToolTip(cb_fc, "Legge le prime righe del file per generare un contesto automatico.")
+        
+        self.cb_full_sample = ttk.Checkbutton(f_chk_ctx, text="Full Sample (Più lento)", variable=self.var_full_sample, style="Card.TCheckbutton")
         self.cb_full_sample.pack(side="left")
-        ToolTip(self.cb_full_sample, "Usa l'intero contenuto del file per generare il contesto. Più accurato ma più lento e costoso.")
+        ToolTip(self.cb_full_sample, "Usa tutto il file per generare il contesto (più costoso/lento).")
 
-        # CARD 4: LOGICA
-        lf_perf = self._create_card(container, "Logica & Performance")
-        f_chk = ttk.Frame(lf_perf, style='Card.TFrame')
-        f_chk.pack(fill="x", pady=(0, 15))
+        # CARD: LOGICA
+        c_perf = self._create_card(container, "Logica & Performance", "⚡")
+        
+        f_chk = tk.Frame(c_perf, bg=C_CARD_BG)
+        f_chk.pack(fill="x", pady=(0, 20))
+        
         self.var_cache = tk.BooleanVar(value=True)
         self.var_rotate = tk.BooleanVar(value=True)
-        self.var_dry = tk.BooleanVar(value=False)
+        self.var_dry = tk.BooleanVar(value=False) # Manteniamo la variabile ma non la checkbox qui
         self.var_transonly = tk.BooleanVar(value=False)
         self.var_server = tk.BooleanVar(value=False)
         self.var_resume = tk.BooleanVar(value=False)
         self.var_filelog = tk.BooleanVar(value=False)
         self.var_reflect = tk.BooleanVar(value=False)
         self.var_fuzzy = tk.BooleanVar(value=False)
+        self.var_shutdown = tk.BooleanVar(value=False)
         
-        c1 = ttk.Checkbutton(f_chk, text="Salva Cache", variable=self.var_cache, style="Card.TCheckbutton", command=self._update_ui_states)
-        c1.grid(row=0, column=0, padx=10, sticky="w")
-        ToolTip(c1, "Salva le traduzioni in un file per riutilizzarle in futuro e non sprecare API calls.")
-        c2 = ttk.Checkbutton(f_chk, text="Auto-Rotazione API", variable=self.var_rotate, style="Card.TCheckbutton")
-        c2.grid(row=0, column=1, padx=10, sticky="w")
-        ToolTip(c2, "In caso di errore o limite di quota, passa automaticamente alla API key successiva.")
-        c3 = ttk.Checkbutton(f_chk, text="Dry Run (Preventivo)", variable=self.var_dry, style="Card.TCheckbutton")
-        c3.grid(row=0, column=2, padx=10, sticky="w")
-        ToolTip(c3, "Simula il processo, analizza i file e stima i costi senza tradurre nulla.")
-        c4 = ttk.Checkbutton(f_chk, text="Solo Output Tradotto (.txt)", variable=self.var_transonly, style="Card.TCheckbutton")
-        c4.grid(row=1, column=0, padx=10, pady=5, sticky="w")
-        ToolTip(c4, "Crea un file .txt contenente solo le stringhe tradotte, invece di ricreare il file originale.")
-        c5 = ttk.Checkbutton(f_chk, text="Server Mode (No Blacklist)", variable=self.var_server, style="Card.TCheckbutton")
-        c5.grid(row=1, column=1, padx=10, pady=5, sticky="w")
-        ToolTip(c5, "Impedisce di mettere in blacklist le API key. Utile per server che devono riprovare all'infinito.")
-        c7 = ttk.Checkbutton(f_chk, text="Resume (Salta esistenti)", variable=self.var_resume, style="Card.TCheckbutton")
-        c7.grid(row=1, column=2, padx=10, pady=5, sticky="w")
-        ToolTip(c7, "Se un file di output esiste già, salta le righe/voci già tradotte.")
-        c8 = ttk.Checkbutton(f_chk, text="File Log (log.txt)", variable=self.var_filelog, style="Card.TCheckbutton")
-        c8.grid(row=2, column=0, padx=10, pady=5, sticky="w")
-        ToolTip(c8, "Salva un log dettagliato di tutte le operazioni nel file 'log.txt'.")
-        c9 = ttk.Checkbutton(f_chk, text="Agentic Reflection (Alta Qualità)", variable=self.var_reflect, style="Card.TCheckbutton")
-        c9.grid(row=2, column=1, padx=10, pady=5, sticky="w")
-        ToolTip(c9, "L'AI corregge la propria traduzione. Raddoppia i costi ma aumenta la qualità.")
-        
-        f_fuzzy = ttk.Frame(f_chk, style='Card.TFrame')
-        f_fuzzy.grid(row=2, column=2, padx=10, pady=5, sticky="w")
-        c10 = ttk.Checkbutton(f_fuzzy, text="Fuzzy Match", variable=self.var_fuzzy, style="Card.TCheckbutton", command=self._update_ui_states)
-        c10.grid(row=2, column=2, padx=10, pady=5, sticky="w")
-        ToolTip(c10, "Usa la cache per stringhe simili (richiede 'thefuzz').")
-        self.ent_fuzzy_threshold = PlaceholderEntry(f_fuzzy, "90", width=4)
-        self.ent_fuzzy_threshold.grid(row=2, column=3, padx=(5,0), sticky="w")
-        ToolTip(self.ent_fuzzy_threshold, "Percentuale di similarità (basata su distanza di Levenshtein). Valore 0-100.")
-        
-        f_num = ttk.Frame(lf_perf, style='Card.TFrame')
+        checks = [
+            ("Salva Cache", self.var_cache, "Salva le traduzioni per non ripeterle."),
+            ("Auto-Rotazione API", self.var_rotate, "Passa alla chiave successiva se una finisce la quota."),
+            # ("Dry Run (Preventivo)", self.var_dry, "Simula il processo per stimare i costi."), # SPOSTATO
+            ("Solo Output .txt", self.var_transonly, "Genera solo un file di testo con le traduzioni."),
+            ("Server Mode", self.var_server, "Riprova all'infinito in caso di errore (no blacklist)."),
+            ("Resume (Salta fatti)", self.var_resume, "Salta le righe già tradotte nel file di output."),
+            ("File Log (log.txt)", self.var_filelog, "Salva il log su file."),
+            ("Agentic Reflection", self.var_reflect, "L'AI ricontrolla la propria traduzione (2x costo)."),
+            ("Fuzzy Match Cache", self.var_fuzzy, "Usa la cache anche per frasi simili (maiuscole/punteggiatura)."),
+            ("Spegnimento Auto", self.var_shutdown, "Spegne il PC al termine del lavoro.")
+        ]
+        for i, (txt, var, tip) in enumerate(checks):
+            cmd = self._update_ui_states if txt == "Salva Cache" else None
+            cb = ttk.Checkbutton(f_chk, text=txt, variable=var, style="Card.TCheckbutton", command=cmd)
+            cb.grid(row=i//3, column=i%3, padx=10, pady=8, sticky="w")
+            ToolTip(cb, tip)
+
+        f_num = tk.Frame(c_perf, bg=C_CARD_BG)
         f_num.pack(fill="x", pady=(0, 15))
-        ttk.Label(f_num, text="Batch Size:", style='Card.TLabel').pack(side="left")
-        self.ent_batch = PlaceholderEntry(f_num, "30", width=5)
-        self.ent_batch.pack(side="left", padx=(5, 20))
-        ttk.Label(f_num, text="RPM:", style='Card.TLabel').pack(side="left")
-        self.ent_rpm = PlaceholderEntry(f_num, "Max", width=5)
-        self.ent_rpm.pack(side="left", padx=(5, 15))
+        
+        # Grid Layout 2x3 for Numeric Params
+        f_n00 = self._make_grid_frame(f_num, 0, 0)
+        ttk.Label(f_n00, text="Batch Size", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_batch = PlaceholderEntry(f_n00, "30", width=6)
+        self.ent_batch.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_batch, "Righe per richiesta.")
 
-        ttk.Label(f_num, text="Max Entries:", style='Card.TLabel').pack(side="left")
-        self.ent_maxentr = PlaceholderEntry(f_num, "None", width=8)
-        self.ent_maxentr.pack(side="left", padx=(5, 15))
-        ToolTip(self.ent_maxentr, "Salta i file che hanno più di N voci da tradurre. Utile per evitare file enormi.")
+        f_n01 = self._make_grid_frame(f_num, 0, 1)
+        ttk.Label(f_n01, text="RPM Limit", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_rpm = PlaceholderEntry(f_n01, "Max", width=6)
+        self.ent_rpm.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_rpm, "Richieste per minuto massime.")
 
-        ttk.Label(f_num, text="Ctx Win:", style='Card.TLabel').pack(side="left")
-        self.ent_ctxwin = PlaceholderEntry(f_num, "0", width=5)
-        self.ent_ctxwin.pack(side="left", padx=(5, 15))
-        ToolTip(self.ent_ctxwin, "Finestra di contesto dinamica. Invia le ultime N traduzioni all'AI per migliorare la coerenza. (Default: 0)")
+        f_n10 = self._make_grid_frame(f_num, 1, 0)
+        ttk.Label(f_n10, text="Max Entries", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_maxentr = PlaceholderEntry(f_n10, "None", width=6)
+        self.ent_maxentr.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_maxentr, "Limite righe per file.")
 
+        f_n11 = self._make_grid_frame(f_num, 1, 1)
+        ttk.Label(f_n11, text="Ctx Window", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_ctxwin = PlaceholderEntry(f_n11, "0", width=6)
+        self.ent_ctxwin.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_ctxwin, "Righe precedenti da inviare come contesto.")
 
-        f_wrap = ttk.Frame(lf_perf, style='Card.TFrame')
-        f_wrap.pack(fill="x", pady=(0, 15))
-        ttk.Label(f_wrap, text="Wrap At:", style='Card.TLabel').pack(side="left")
-        self.ent_wrap = PlaceholderEntry(f_wrap, "None", width=5)
-        self.ent_wrap.pack(side="left", padx=(5, 20))
-        ttk.Label(f_wrap, text="Newline Char:", style='Card.TLabel').pack(side="left")
-        self.ent_newline = PlaceholderEntry(f_wrap, "\\n", width=5)
-        self.ent_newline.pack(side="left", padx=5)
+        f_n20 = self._make_grid_frame(f_num, 2, 0)
+        ttk.Label(f_n20, text="Wrap At", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_wrap = PlaceholderEntry(f_n20, "None", width=6)
+        self.ent_wrap.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_wrap, "A capo automatico dopo N caratteri.")
 
-        f_glo = ttk.Frame(lf_perf, style='Card.TFrame')
-        f_glo.pack(fill="x", pady=(0, 10))
-        ttk.Label(f_glo, text="Glossario CSV:", style='Card.TLabel', width=15).pack(side="left")
-        self.ent_gloss = ttk.Entry(f_glo)
-        self.ent_gloss.pack(side="left", fill="x", expand=True, padx=5)
+        f_n21 = self._make_grid_frame(f_num, 2, 1)
+        ttk.Label(f_n21, text="Newline Char", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_newline = PlaceholderEntry(f_n21, "\\n", width=6)
+        self.ent_newline.pack(fill="x", pady=(2,0))
+        ToolTip(self.ent_newline, "Carattere per l'a capo (es. \\n).")
+
+        # Glossario & Cache
+        ttk.Separator(c_perf, orient="horizontal").pack(fill="x", pady=10)
+        
+        f_files = tk.Frame(c_perf, bg=C_CARD_BG)
+        f_files.pack(fill="x")
+        
+        f_glo = tk.Frame(f_files, bg=C_CARD_BG)
+        f_glo.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        ttk.Label(f_glo, text="Glossario CSV", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        f_glo_in = tk.Frame(f_glo, bg=C_CARD_BG)
+        f_glo_in.pack(fill="x", pady=(2,0))
+        self.ent_gloss = ttk.Entry(f_glo_in)
+        self.ent_gloss.pack(side="left", fill="x", expand=True)
         if os.path.exists("glossary.csv"): self.ent_gloss.insert(0, "glossary.csv")
-        btn_browse_gloss = ttk.Button(f_glo, text="...", width=4, command=lambda: self._browse_file(self.ent_gloss))
-        btn_browse_gloss.pack(side="left")
-        ToolTip(btn_browse_gloss, "Sfoglia file")
-        
-        f_cache = ttk.Frame(lf_perf, style='Card.TFrame')
-        f_cache.pack(fill="x")
-        ttk.Label(f_cache, text="File Cache JSON:", style='Card.TLabel', width=15).pack(side="left")
-        self.ent_cache_file = ttk.Entry(f_cache)
-        self.ent_cache_file.pack(side="left", fill="x", expand=True, padx=5)
-        ToolTip(self.ent_cache_file, "Percorso del file di cache. Default: alumen_cache.json")
+        ttk.Button(f_glo_in, text="...", width=3, command=lambda: self._browse_file(self.ent_gloss)).pack(side="right", padx=(5,0))
+        ToolTip(self.ent_gloss, "File CSV con termini forzati (Originale,Traduzione).")
+
+        f_ca = tk.Frame(f_files, bg=C_CARD_BG)
+        f_ca.pack(side="left", fill="x", expand=True)
+        ttk.Label(f_ca, text="File Cache JSON", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        f_ca_in = tk.Frame(f_ca, bg=C_CARD_BG)
+        f_ca_in.pack(fill="x", pady=(2,0))
+        self.ent_cache_file = ttk.Entry(f_ca_in)
+        self.ent_cache_file.pack(side="left", fill="x", expand=True)
         if os.path.exists(AlumenCore.DEFAULT_CACHE_FILE): self.ent_cache_file.insert(0, AlumenCore.DEFAULT_CACHE_FILE)
-        self.btn_cache_browse = ttk.Button(f_cache, text="...", width=4, command=lambda: self._browse_file(self.ent_cache_file))
-        self.btn_cache_browse.pack(side="left")
-        ToolTip(self.btn_cache_browse, "Sfoglia file")
+        self.btn_cache_browse = ttk.Button(f_ca_in, text="...", width=3, command=lambda: self._browse_file(self.ent_cache_file))
+        self.btn_cache_browse.pack(side="right", padx=(5,0))
+        ToolTip(self.btn_cache_browse, "File JSON dove salvare/caricare le traduzioni.")
 
-    # --- PAGE TOOLS ---
-    def _build_page_tools(self, parent):
-        container = ttk.Frame(parent, padding=40)
+    # --- PAGE 3: API MANAGEMENT (NUOVA) ---
+    def _build_page_api(self, parent):
+        sf = ScrollableFrame(parent)
+        sf.pack(fill="both", expand=True)
+        container = ttk.Frame(sf.scrollable_frame, padding=40)
         container.pack(fill="both", expand=True)
-        tk.Label(container, text="Strumenti di Utilità", bg=COLOR_BG_MAIN, fg=COLOR_TEXT_HEADER, font=FONT_HEADER_PAGE).pack(anchor="w", pady=(0, 25))
-
-        # TOOL 1: EXTRACTOR
-        lf_ex = self._create_card(container, "Estrattore Cache (Importa Traduzioni)")
-        f_ex1 = ttk.Frame(lf_ex, style='Card.TFrame')
-        f_ex1.pack(fill="x", pady=5)
-        ttk.Label(f_ex1, text="Cartella Originali:", style='Card.TLabel', width=15).pack(side="left")
-        self.ent_ex_src = ttk.Entry(f_ex1)
-        self.ent_ex_src.pack(side="left", fill="x", expand=True, padx=5)
-        btn_ex_browse_src = ttk.Button(f_ex1, text="📂", width=4, command=lambda: self._browse_folder(self.ent_ex_src))
-        btn_ex_browse_src.pack(side="right")
-        ToolTip(btn_ex_browse_src, "Sfoglia cartella")
-        f_ex2 = ttk.Frame(lf_ex, style='Card.TFrame')
-        f_ex2.pack(fill="x", pady=5)
-        ttk.Label(f_ex2, text="Cartella Tradotti:", style='Card.TLabel', width=15).pack(side="left")
-        self.ent_ex_tgt = ttk.Entry(f_ex2)
-        self.ent_ex_tgt.pack(side="left", fill="x", expand=True, padx=5)
-        btn_ex_browse_tgt = ttk.Button(f_ex2, text="📂", width=4, command=lambda: self._browse_folder(self.ent_ex_tgt))
-        btn_ex_browse_tgt.pack(side="right")
-        ToolTip(btn_ex_browse_tgt, "Sfoglia cartella")
         
-        f_ex_opts = ttk.Frame(lf_ex, style='Card.TFrame')
-        f_ex_opts.pack(fill="x", pady=5)
-        ttk.Label(f_ex_opts, text="Formato:", style='Card.TLabel', width=16).pack(side="left")
-        self.cmb_ex_fmt = ttk.Combobox(f_ex_opts, values=["csv", "json", "po"], width=8, state="readonly")
+        tk.Label(container, text="Gestione Chiavi API", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
+        
+        # CARD: LISTA API
+        c_list = self._create_card(container, "Chiavi Caricate", "🔑")
+        
+        # Treeview
+        cols = ("idx", "key", "status", "calls")
+        self.tree_api = ttk.Treeview(c_list, columns=cols, show='headings', height=10)
+        self.tree_api.heading("idx", text="#")
+        self.tree_api.heading("key", text="Chiave (Ultime cifre)")
+        self.tree_api.heading("status", text="Stato")
+        self.tree_api.heading("calls", text="Chiamate")
+        
+        self.tree_api.column("idx", width=40, anchor="center")
+        self.tree_api.column("key", width=150, anchor="center")
+        self.tree_api.column("status", width=100, anchor="center")
+        self.tree_api.column("calls", width=80, anchor="center")
+        
+        self.tree_api.pack(fill="x", pady=(0, 10))
+        
+        # Actions Row
+        f_act = tk.Frame(c_list, bg=C_CARD_BG)
+        f_act.pack(fill="x")
+        
+        self.ent_new_api = PlaceholderEntry(f_act, "Incolla nuova API Key qui...")
+        self.ent_new_api.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        
+        ttk.Button(f_act, text="➕ Aggiungi", style='Action.TButton', command=self._api_add).pack(side="left")
+        ttk.Button(f_act, text="🗑️ Rimuovi Selez.", command=self._api_remove).pack(side="left", padx=5)
+        ttk.Button(f_act, text="🚫 Blacklist", style='Warn.TButton', command=self._api_blacklist).pack(side="left", padx=5)
+        ttk.Button(f_act, text="✅ Reset Tutte", command=self._api_reset).pack(side="right")
+        
+        ttk.Button(c_list, text="🔄 Aggiorna Lista", command=self._refresh_api_list).pack(anchor="e", pady=(10,0))
+
+    # --- PAGE 4: TOOLS ---
+    def _build_page_tools(self, parent):
+        sf = ScrollableFrame(parent)
+        sf.pack(fill="both", expand=True)
+        container = ttk.Frame(sf.scrollable_frame, padding=40)
+        container.pack(fill="both", expand=True)
+        
+        tk.Label(container, text="Strumenti di Utilità", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
+
+        # --- MODIFICA: CARD DRY RUN ---
+        c_dry = self._create_card(container, "Analisi e Preventivo", "📊")
+        ttk.Label(c_dry, text="Esegui una simulazione per calcolare token e costi stimati senza tradurre.", style='Card.TLabel').pack(anchor="w", pady=(0,10))
+        
+        f_dry_act = tk.Frame(c_dry, bg=C_CARD_BG)
+        f_dry_act.pack(fill="x")
+        
+        # Checkbox sincronizzata con la variabile globale
+        cb_dry = ttk.Checkbutton(f_dry_act, text="Abilita Modalità Dry Run", variable=self.var_dry, style="Card.TCheckbutton")
+        cb_dry.pack(side="left")
+        
+        btn_dry = ttk.Button(f_dry_act, text="Avvia Analisi Dry Run", style='Action.TButton', command=self._run_dry_run_tool)
+        btn_dry.pack(side="right")
+        ToolTip(btn_dry, "Lancia il processo in modalità simulazione.")
+        # ------------------------------
+
+        # EXTRACTOR
+        c_ex = self._create_card(container, "Estrattore Cache", "📥")
+        
+        f_ex_paths = tk.Frame(c_ex, bg=C_CARD_BG)
+        f_ex_paths.pack(fill="x", pady=(0, 15))
+        
+        f_src = tk.Frame(f_ex_paths, bg=C_CARD_BG)
+        f_src.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        ttk.Label(f_src, text="Cartella Originali", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        f_src_in = tk.Frame(f_src, bg=C_CARD_BG)
+        f_src_in.pack(fill="x", pady=(2,0))
+        self.ent_ex_src = ttk.Entry(f_src_in)
+        self.ent_ex_src.pack(side="left", fill="x", expand=True)
+        ttk.Button(f_src_in, text="📂", width=3, command=lambda: self._browse_folder(self.ent_ex_src)).pack(side="right", padx=(5,0))
+        
+        f_tgt = tk.Frame(f_ex_paths, bg=C_CARD_BG)
+        f_tgt.pack(side="left", fill="x", expand=True)
+        ttk.Label(f_tgt, text="Cartella Tradotti", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        f_tgt_in = tk.Frame(f_tgt, bg=C_CARD_BG)
+        f_tgt_in.pack(fill="x", pady=(2,0))
+        self.ent_ex_tgt = ttk.Entry(f_tgt_in)
+        self.ent_ex_tgt.pack(side="left", fill="x", expand=True)
+        ttk.Button(f_tgt_in, text="📂", width=3, command=lambda: self._browse_folder(self.ent_ex_tgt)).pack(side="right", padx=(5,0))
+        
+        f_ex_opts = tk.Frame(c_ex, bg=C_CARD_BG)
+        f_ex_opts.pack(fill="x", pady=(0, 15))
+        
+        ttk.Label(f_ex_opts, text="Formato:", style='Card.TLabel').pack(side="left")
+        self.cmb_ex_fmt = ttk.Combobox(f_ex_opts, values=["csv", "json", "po"], width=10, state="readonly")
         self.cmb_ex_fmt.current(0)
         self.cmb_ex_fmt.bind("<<ComboboxSelected>>", self._update_extractor_ui)
-        self.cmb_ex_fmt.pack(side="left", padx=10)
+        self.cmb_ex_fmt.pack(side="left", padx=(10, 20))
         
-        # --- Contenitore opzioni specifiche formato ---
-        self.f_ex_csv_opts = ttk.Frame(lf_ex, style='Card.TFrame')
-        self.f_ex_csv_opts.pack(fill="x", pady=5)
-        ttk.Label(self.f_ex_csv_opts, text="Col. Originale:", style='Card.TLabel', width=16).pack(side="left")
+        # Opzioni dinamiche
+        self.f_ex_csv_opts = tk.Frame(f_ex_opts, bg=C_CARD_BG)
+        self.f_ex_csv_opts.pack(side="left", fill="x", expand=True)
         self.ent_ex_col_src = PlaceholderEntry(self.f_ex_csv_opts, "3", width=5)
-        self.ent_ex_col_src.pack(side="left", padx=(10, 20))
-        ttk.Label(self.f_ex_csv_opts, text="Col. Tradotta:", style='Card.TLabel').pack(side="left")
         self.ent_ex_col_tgt = PlaceholderEntry(self.f_ex_csv_opts, "3", width=5)
-        self.ent_ex_col_tgt.pack(side="left", padx=10)
-
-        self.f_ex_json_opts = ttk.Frame(lf_ex, style='Card.TFrame')
-        # f_ex_json_opts non viene packato subito
-        ttk.Label(self.f_ex_json_opts, text="JSON Keys:", style='Card.TLabel', width=16).pack(side="left")
-        self.ent_ex_json_keys = PlaceholderEntry(self.f_ex_json_opts, "es. title, description")
-        self.ent_ex_json_keys.pack(side="left", fill="x", expand=True, padx=10)
-
-        f_ex3 = ttk.Frame(lf_ex, style='Card.TFrame')
-        f_ex3.pack(fill="x", pady=10)
-        ttk.Button(f_ex3, text="🛠️ Estrai Cache", style='Tool.TButton', command=self._run_extractor_tool).pack(side="right")
-        self._update_extractor_ui() # Stato iniziale
-
-        # TOOL 2: SCANNER
-        lf_scan = self._create_card(container, "Auto-Glossary Scanner (AI)")
-        ttk.Label(lf_scan, text="Scansiona i file per trovare nomi propri.", style='Card.TLabel').pack(anchor="w", pady=(0,10))
-        f_scan_opts = ttk.Frame(lf_scan, style='Card.TFrame')
-        f_scan_opts.pack(fill="x")
-        ttk.Label(f_scan_opts, text="Formato File:", style='Card.TLabel', width=16).pack(side="left")
-        self.cmb_scan_fmt = ttk.Combobox(f_scan_opts, values=["csv", "json", "po", "srt"], width=8, state="readonly")
-        self.cmb_scan_fmt.current(0)
-        self.cmb_scan_fmt.pack(side="left", padx=10)
-        self.btn_scan = ttk.Button(f_scan_opts, text="🕵️ Scansiona", style='Tool.TButton', command=self._run_scanner_tool)
-        self.btn_scan.pack(side="left", padx=20)
-
-    # --- PAGE LOG ---
-    def _build_page_log(self, parent):
-        container = ttk.Frame(parent, padding=40)
-        container.pack(fill="both", expand=True)
-        f_head = tk.Frame(container, bg=COLOR_BG_MAIN)
-        f_head.pack(fill="x", pady=(0, 20))
-        tk.Label(f_head, text="Esecuzione Processo", bg=COLOR_BG_MAIN, fg=COLOR_TEXT_HEADER, font=FONT_HEADER_PAGE).pack(side="left")
         
-        self.btn_show_stats = ttk.Button(f_head, text="📊 MOSTRA STATS", command=self._show_stats_window)
-        self.btn_show_stats.pack(side="right", padx=(0, 10))
+        f_c1 = tk.Frame(self.f_ex_csv_opts, bg=C_CARD_BG)
+        f_c1.pack(side="left", expand=True, fill="x")
+        ttk.Label(f_c1, text="Col. Orig:", style='Card.TLabel', font=F_SMALL).pack(side="left")
+        self.ent_ex_col_src.pack(side="left", padx=(5, 15), fill="x", expand=True)
+        
+        f_c2 = tk.Frame(self.f_ex_csv_opts, bg=C_CARD_BG)
+        f_c2.pack(side="left", expand=True, fill="x")
+        ttk.Label(f_c2, text="Col. Trad:", style='Card.TLabel', font=F_SMALL).pack(side="left")
+        self.ent_ex_col_tgt.pack(side="left", padx=(5, 0), fill="x", expand=True)
+
+        self.f_ex_json_opts = tk.Frame(f_ex_opts, bg=C_CARD_BG)
+        self.ent_ex_json_keys = PlaceholderEntry(self.f_ex_json_opts, "es. title, description")
+        ttk.Label(self.f_ex_json_opts, text="Keys:", style='Card.TLabel', font=F_SMALL).pack(side="left")
+        self.ent_ex_json_keys.pack(side="left", padx=(5, 0), fill="x", expand=True)
+
+        btn_ex = ttk.Button(c_ex, text="Esegui Estrazione", style='Action.TButton', command=self._run_extractor_tool)
+        btn_ex.pack(anchor="e")
+        ToolTip(btn_ex, "Crea un file cache JSON confrontando i file originali e tradotti.")
+        self._update_extractor_ui()
+
+        # SCANNER
+        c_scan = self._create_card(container, "Auto-Glossary Scanner", "🔍")
+        ttk.Label(c_scan, text="Analizza i file per trovare Nomi Propri e Termini Unici.", style='Card.TLabel').pack(anchor="w", pady=(0,10))
+        f_scan = tk.Frame(c_scan, bg=C_CARD_BG)
+        f_scan.pack(fill="x")
+        ttk.Label(f_scan, text="Formato File:", style='Card.TLabel').pack(side="left")
+        self.cmb_scan_fmt = ttk.Combobox(f_scan, values=["csv", "json", "po", "srt"], width=10, state="readonly")
+        self.cmb_scan_fmt.current(0)
+        self.cmb_scan_fmt.pack(side="left", padx=(10, 20))
+        btn_sc = ttk.Button(f_scan, text="Avvia Scansione", style='Action.TButton', command=self._run_scanner_tool)
+        btn_sc.pack(side="right")
+        ToolTip(btn_sc, "Usa l'AI per estrarre una lista di termini univoci dai file di input.")
+
+    # --- PAGE 5: LOG ---
+    def _build_page_log(self, parent):
+        container = ttk.Frame(parent, padding=30)
+        container.pack(fill="both", expand=True)
+        
+        f_head = tk.Frame(container, bg=C_MAIN_BG)
+        f_head.pack(fill="x", pady=(0, 15))
+        tk.Label(f_head, text="Console di Esecuzione", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(side="left")
+        
+        # --- MODIFICA: Pulsante Vedi Prompt ---
+        self.btn_view_prompt = ttk.Button(f_head, text="👁️ Vedi Prompt", command=self._show_last_prompt)
+        self.btn_view_prompt.pack(side="right", padx=(10, 0))
+        ToolTip(self.btn_view_prompt, "Visualizza l'ultimo prompt inviato all'AI.")
+        # --------------------------------------
+
         self.btn_save_cache = ttk.Button(f_head, text="💾 Salva Cache", command=self._force_save_cache)
-        ToolTip(self.btn_save_cache, "Forza il salvataggio immediato della cache su disco.")        
         self.btn_save_cache.pack(side="right")
-        f_info = tk.Frame(container, bg=COLOR_BG_CARD, padx=20, pady=10)
-        f_info.pack(fill="x", pady=(0, 15))
-        self.lbl_stats_files = tk.Label(f_info, text="File: 0", bg=COLOR_BG_CARD, font=FONT_STATS, fg=COLOR_BTN_ACTION)
-        self.lbl_stats_files.pack(side="left", padx=20)
-        self.lbl_stats_entries = tk.Label(f_info, text="Righe: 0", bg=COLOR_BG_CARD, font=FONT_STATS, fg=COLOR_BTN_ACTION)
-        self.lbl_stats_entries.pack(side="left", padx=20)
-        self.lbl_stats_cache = tk.Label(f_info, text="Cache: 0", bg=COLOR_BG_CARD, font=FONT_STATS, fg="#f39c12")
-        self.lbl_stats_cache.pack(side="left", padx=20)
-        frame_log = tk.Frame(container, bg="#bdc3c7", bd=1)
+        ToolTip(self.btn_save_cache, "Forza il salvataggio immediato della cache su disco.")
+        
+        # Stats
+        f_info = tk.Frame(container, bg=C_CARD_BG, padx=20, pady=20, relief="flat")
+        f_info.pack(fill="x", pady=(0, 20))
+        
+        def make_stat(parent, label, color):
+            f = tk.Frame(parent, bg=C_CARD_BG)
+            f.pack(side="left", expand=True)
+            l_val = tk.Label(f, text="0", bg=C_CARD_BG, font=("Segoe UI", 20, "bold"), fg=color)
+            l_val.pack()
+            tk.Label(f, text=label, bg=C_CARD_BG, font=F_SMALL, fg=C_TEXT_SEC).pack()
+            return l_val
+
+        self.lbl_stats_files = make_stat(f_info, "FILE COMPLETATI", C_ACCENT)
+        self.lbl_stats_entries = make_stat(f_info, "RIGHE TRADOTTE", C_SUCCESS)
+        self.lbl_stats_cache = make_stat(f_info, "VOCI IN CACHE", C_WARN)
+        
+        self.lbl_stats_tokens_in = make_stat(f_info, "TOKEN INPUT", "#666666")
+        self.lbl_stats_tokens_out = make_stat(f_info, "TOKEN OUTPUT", "#666666")
+        self.lbl_stats_api_calls = make_stat(f_info, "CHIAMATE API", "#666666")
+        self.lbl_stats_time = make_stat(f_info, "TEMPO TOTALE", "#666666")
+        
+        # Progress Bar File Corrente
+        f_prog = tk.Frame(container, bg=C_MAIN_BG, pady=10)
+        f_prog.pack(fill="x")
+        tk.Label(f_prog, text="Progresso File Corrente:", bg=C_MAIN_BG, font=F_SMALL).pack(anchor="w")
+        self.progress_bar = ttk.Progressbar(f_prog, orient="horizontal", length=100, mode="determinate")
+        self.progress_bar.pack(fill="x", pady=(5,0))
+        self.lbl_file_status = tk.Label(f_prog, text="In attesa...", bg=C_MAIN_BG, font=F_SMALL, fg=C_TEXT_SEC)
+        self.lbl_file_status.pack(anchor="e")
+
+        # Terminal
+        frame_log = tk.Frame(container, bg="#1E1E1E", bd=0)
         frame_log.pack(fill="both", expand=True)
-        self.txt_log = scrolledtext.ScrolledText(frame_log, state='disabled', font=("Consolas", 10), 
-                                                 bg="#1e272e", fg="#ecf0f1", relief="flat", padx=10, pady=10)
+        self.txt_log = scrolledtext.ScrolledText(frame_log, state='disabled', font=F_MONO, 
+                                                 bg="#1E1E1E", fg="#D4D4D4", relief="flat", padx=15, pady=15, insertbackground="white")
         self.txt_log.pack(fill="both", expand=True)
-        f_act = tk.Frame(container, bg=COLOR_BG_MAIN, pady=20)
+        
+        # Actions
+        f_act = tk.Frame(container, bg=C_MAIN_BG, pady=20)
         f_act.pack(fill="x")
-        self.btn_run = ttk.Button(f_act, text="▶  AVVIA", style='Action.TButton', command=self._start_process)
+        self.btn_run = ttk.Button(f_act, text="▶  AVVIA PROCESSO", style='Action.TButton', command=self._start_process)
         self.btn_run.pack(side="left", fill="x", expand=True, padx=5)
+        ToolTip(self.btn_run, "Avvia la traduzione con le impostazioni correnti.")
+        
         self.btn_pause = ttk.Button(f_act, text="⏸  PAUSA", style='Warn.TButton', command=self._toggle_pause, state='disabled')
         self.btn_pause.pack(side="left", fill="x", expand=True, padx=5)
-        self.btn_skip_file = ttk.Button(f_act, text="⏭  SALTA FILE", command=self._skip_file, state='disabled')
-        self.btn_skip_file.pack(side="left", fill="x", expand=True, padx=5)
-        self.btn_skip_api = ttk.Button(f_act, text="🔄  SALTA API", command=self._skip_api, state='disabled')
-        self.btn_skip_api.pack(side="left", fill="x", expand=True, padx=5)
+        ToolTip(self.btn_pause, "Mette in pausa il processo (completa il batch corrente).")
+        
+        self.btn_skip = ttk.Button(f_act, text="⏭  SALTA FILE", command=self._skip_file, state='disabled')
+        self.btn_skip.pack(side="left", fill="x", expand=True, padx=5)
+        ToolTip(self.btn_skip, "Interrompe il file corrente e passa al successivo.")
+        
         self.btn_stop = ttk.Button(f_act, text="⏹  STOP", style='Danger.TButton', command=self._stop_process)
-        self.btn_stop.pack(side="left", fill="x", expand=True, padx=5)
+        self.btn_stop.pack(side="right", fill="x", expand=True, padx=5)
+        ToolTip(self.btn_stop, "Interrompe completamente il processo.")
 
-    # --- LOGIC HANDLERS ---
+    # --- LOGIC ---
+    def _toggle_ai_provider(self):
+        provider = self.var_ai_provider.get()
+        if provider == "gemini":
+            self.f_ollama.pack_forget()
+            self.f_gemini.pack(fill="x", pady=(10, 0))
+            self.var_ollama_enabled.set(False)
+        else:
+            self.f_gemini.pack_forget()
+            self.f_ollama.pack(fill="x", pady=(10, 0))
+            self.var_ollama_enabled.set(True)
+
     def _check_update_thread(self):
         def _w():
             new_ver = AlumenCore.check_for_updates()
-            if new_ver: messagebox.showinfo("Aggiornamento", f"Versione {new_ver} disponibile su GitHub!")
+            if new_ver: 
+                self.status_var.set(f"Aggiornamento disponibile: v{new_ver}")
+                messagebox.showinfo("Aggiornamento", f"Versione {new_ver} disponibile su GitHub!")
         threading.Thread(target=_w, daemon=True).start()
 
     def _update_ui_states(self, event=None):
+        if not self.is_initialized: return # Evita crash all'avvio
+        
         state_cache = 'normal' if self.var_cache.get() else 'disabled'
         self.ent_cache_file.config(state=state_cache)
-        self.btn_cache_browse.config(state=state_cache)
+        if hasattr(self, 'btn_cache_browse'):
+            self.btn_cache_browse.config(state=state_cache)
         self.btn_save_cache.config(state=state_cache)
         
-        if self.var_file_ctx.get(): self.cb_full_sample.config(state='normal')
-        else:
-            self.cb_full_sample.config(state='disabled')
-            self.var_full_sample.set(False)
+        if hasattr(self, 'cb_full_sample'): # Controllo di sicurezza aggiunto
+            if self.var_file_ctx.get(): self.cb_full_sample.config(state='normal')
+            else:
+                self.cb_full_sample.config(state='disabled')
+                self.var_full_sample.set(False)
             
         fmt = self.cmb_fmt.get()
         state_csv = 'normal' if fmt in ['csv', 'xlsx'] else 'disabled'
@@ -590,12 +914,14 @@ class AlumenGUI:
         self.ent_col_out.config(state=state_csv)
         self.ent_maxcols.config(state=state_csv)
         
+        # Excel specific
+        state_xlsx = 'normal' if fmt == 'xlsx' else 'disabled'
+        if hasattr(self, 'ent_xlsx_src'):
+            self.ent_xlsx_src.config(state=state_xlsx)
+            self.ent_xlsx_tgt.config(state=state_xlsx)
+        
         state_json = 'normal' if fmt == 'json' else 'disabled'
         if isinstance(self.ent_jkeys, ttk.Entry): self.ent_jkeys.config(state=state_json)
-
-        state_fuzzy = 'normal' if self.var_fuzzy.get() else 'disabled'
-        if isinstance(self.ent_fuzzy_threshold, PlaceholderEntry):
-            self.ent_fuzzy_threshold.config(state=state_fuzzy)
 
     def _toggle_telegram_ui(self):
         enable = self.var_tg_enabled.get()
@@ -610,7 +936,7 @@ class AlumenGUI:
             try:
                 with open("telegram_config.json", "r") as f:
                     data = json.load(f)
-                    self.ent_tg_token.config(state='normal') # Forza enable per scrivere
+                    self.ent_tg_token.config(state='normal')
                     self.ent_tg_chatid.config(state='normal')
                     self.ent_tg_token.delete(0, tk.END)
                     self.ent_tg_token.insert(0, data.get("bot_token", ""))
@@ -652,6 +978,7 @@ class AlumenGUI:
     def _refresh_models_auto(self, override_key=None):
         key = override_key if override_key else self.ent_api.get().split(',')[0].strip()
         if not key: return
+        self.status_var.set("Recupero modelli...")
         def _w():
             ms = AlumenCore.fetch_available_models(key)
             def _u():
@@ -659,6 +986,23 @@ class AlumenGUI:
                     curr = self.cmb_model.get()
                     self.cmb_model['values'] = tuple(ms)
                     if curr not in ms: self.cmb_model.current(0)
+                    self.status_var.set("Modelli aggiornati")
+                else: self.status_var.set("Errore recupero modelli")
+            self.root.after(0, _u)
+        threading.Thread(target=_w, daemon=True).start()
+
+    def _refresh_ollama_models(self):
+        host = self.ent_ollama_host.get()
+        if not host: return
+        self.status_var.set("Connessione a Ollama...")
+        def _w():
+            models = AlumenCore.fetch_ollama_models(host)
+            def _u():
+                self.cmb_ollama_model['values'] = tuple(models)
+                if models: 
+                    self.cmb_ollama_model.current(0)
+                    self.status_var.set("Modelli Ollama caricati")
+                else: self.status_var.set("Nessun modello Ollama trovato")
             self.root.after(0, _u)
         threading.Thread(target=_w, daemon=True).start()
 
@@ -687,13 +1031,65 @@ class AlumenGUI:
         files = AlumenCore.total_files_translated
         entries = AlumenCore.total_entries_translated
         cache_size = len(AlumenCore.translation_cache)
-        self.lbl_stats_files.config(text=f"File: {files}")
-        self.lbl_stats_entries.config(text=f"Righe: {entries}")
-        self.lbl_stats_cache.config(text=f"Cache: {cache_size}")
+        
+        # --- MODIFICA: Lettura Token e API ---
+        tok_in = AlumenCore.total_input_tokens
+        tok_out = AlumenCore.total_output_tokens
+        api_calls = sum(AlumenCore.api_call_counts.values())
+        
+        elapsed = 0
+        if AlumenCore.start_time > 0:
+            elapsed = int(time.time() - AlumenCore.start_time)
+        
+        h, r = divmod(elapsed, 3600)
+        m, s = divmod(r, 60)
+        time_str = f"{h}h {m}m {s}s"
+        # -------------------------------------
+
+        self.lbl_stats_files.config(text=f"{files}")
+        self.lbl_stats_entries.config(text=f"{entries}")
+        self.lbl_stats_cache.config(text=f"{cache_size}")
+        
+        # --- MODIFICA: Aggiornamento Label Token e API ---
+        if hasattr(self, 'lbl_stats_tokens_in'):
+            self.lbl_stats_tokens_in.config(text=f"{tok_in}")
+            self.lbl_stats_tokens_out.config(text=f"{tok_out}")
+            self.lbl_stats_api_calls.config(text=f"{api_calls}")
+            self.lbl_stats_time.config(text=time_str)
+        # -------------------------------------------------
+        
+        # --- MODIFICA: Aggiornamento Progress Bar File ---
+        if hasattr(self, 'progress_bar'):
+            total = AlumenCore.current_file_total_entries
+            processed = AlumenCore.current_file_processed_entries
+            if total > 0:
+                perc = (processed / total) * 100
+                self.progress_bar['value'] = perc
+                
+                # Stima tempo rimanente (molto grezza)
+                if processed > 0 and elapsed > 0:
+                    avg_time_per_entry = elapsed / (entries if entries > 0 else 1) # Media globale
+                    remaining_entries = total - processed
+                    est_seconds = int(remaining_entries * avg_time_per_entry)
+                    m_rem, s_rem = divmod(est_seconds, 60)
+                    self.lbl_file_status.config(text=f"{processed}/{total} ({perc:.1f}%) - Stima fine file: {m_rem}m {s_rem}s")
+                else:
+                    self.lbl_file_status.config(text=f"{processed}/{total} ({perc:.1f}%)")
+            else:
+                self.progress_bar['value'] = 0
+                self.lbl_file_status.config(text="In attesa...")
+        # -------------------------------------------------
+        
+        # Aggiorna lista API se siamo nella tab API
+        if self.current_page == "api":
+            self._refresh_api_list()
+
+        if self.is_running: self.status_var.set(f"In esecuzione... {files} file completati")
         self.root.after(1000, self._update_stats)
     def _force_save_cache(self):
         if self.current_args and self.var_cache.get():
             AlumenCore.check_and_save_cache(self.current_args, force=True)
+            self.status_var.set("Cache salvata su disco")
         else:
             class MockArgs: persistent_cache = True; cache_file = None
             AlumenCore.check_and_save_cache(MockArgs(), force=True)
@@ -703,30 +1099,130 @@ class AlumenGUI:
         if self.pause_event.is_set():
             self.pause_event.clear() # Pause
             self.btn_pause.config(text="▶ RIPRENDI", style='Action.TButton')
+            self.status_var.set("Processo in PAUSA")
+            self.log_queue.put("⏸️ Richiesta di PAUSA inviata...") # Feedback immediato
         else:
             self.pause_event.set() # Resume
             self.btn_pause.config(text="⏸ PAUSA", style='Warn.TButton')
+            self.status_var.set("Processo RIPRESO")
+            self.log_queue.put("▶️ Richiesta di RIPRESA inviata...") # Feedback immediato
     def _skip_file(self):
         if not self.is_running: return
         self.skip_event.set()
-    def _skip_api(self):
-        if not self.is_running: return
-        self.skip_api_event.set()
+        self.status_var.set("Salto file corrente...")
+        self.log_queue.put("⏭️ Richiesta di SKIP FILE inviata...") # Feedback immediato
     def _stop_process(self):
         if self.stop_event.is_set(): return
         self.stop_event.set()
-        self.log_queue.put("🛑 Richiesta di Stop...")
+        self.log_queue.put("🛑 Richiesta di STOP inviata...") # Feedback immediato
         self.is_running = False
         self.btn_pause.config(state='disabled')
-        self.btn_skip_file.config(state='disabled')
-        self.btn_skip_api.config(state='disabled')
+        self.btn_skip.config(state='disabled')
+        self.status_var.set("Processo INTERROTTO")
+
+    # --- MODIFICA: Funzione per mostrare l'ultimo prompt ---
+    def _show_last_prompt(self):
+        prompt = AlumenCore.last_translation_prompt
+        if not prompt:
+            messagebox.showinfo("Info", "Nessun prompt inviato finora.")
+            return
+        
+        top = tk.Toplevel(self.root)
+        top.title("Ultimo Prompt Inviato")
+        top.geometry("700x500")
+        top.configure(bg="#1e272e")
+        
+        st = scrolledtext.ScrolledText(top, bg="#1e272e", fg="#2ecc71", font=("Consolas", 10), padx=15, pady=15)
+        st.pack(fill="both", expand=True)
+        st.insert(tk.END, prompt)
+        st.configure(state='disabled')
+    # -------------------------------------------------------
+
+    # --- API MANAGEMENT LOGIC ---
+    def _refresh_api_list(self):
+        if not hasattr(self, 'tree_api'): return
+        
+        # Salva selezione corrente
+        selected_item = self.tree_api.selection()
+        selected_idx = None
+        if selected_item:
+            try:
+                selected_idx = self.tree_api.item(selected_item[0])['values'][0]
+            except: pass
+
+        # Pulisci
+        for item in self.tree_api.get_children():
+            self.tree_api.delete(item)
+        
+        keys = AlumenCore.available_api_keys
+        curr_idx = AlumenCore.current_api_key_index
+        bl = AlumenCore.blacklisted_api_key_indices
+        counts = AlumenCore.api_call_counts
+        
+        for i, k in enumerate(keys):
+            short_k = f"...{k[-6:]}" if len(k) > 6 else k
+            status = "In Attesa"
+            if i == curr_idx: status = "🟢 ATTIVA"
+            if i in bl: status = "🔴 BLACKLIST"
+            
+            calls = counts.get(i, 0)
+
+            item_id = self.tree_api.insert('', 'end', values=(i, short_k, status, calls))
+            
+            # Ripristina selezione
+            if selected_idx is not None and i == selected_idx:
+                self.tree_api.selection_set(item_id)
+
+    def _api_add(self):
+        k = self.ent_new_api.get_valid_value().strip()
+        if not k: return
+        AlumenCore.add_api_key(k)
+        self.ent_new_api.delete(0, tk.END)
+        self._refresh_api_list()
+        messagebox.showinfo("Info", "API Key aggiunta.")
+
+    def _api_remove(self):
+        sel = self.tree_api.selection()
+        if not sel: return
+        item = self.tree_api.item(sel[0])
+        idx = item['values'][0]
+        AlumenCore.remove_api_key(str(idx))
+        self._refresh_api_list()
+
+    def _api_blacklist(self):
+        sel = self.tree_api.selection()
+        if not sel: return
+        item = self.tree_api.item(sel[0])
+        idx = int(item['values'][0])
+        
+        # Toggle logic: se è già blacklisted, rimuovi. Altrimenti aggiungi.
+        if idx in AlumenCore.blacklisted_api_key_indices:
+            AlumenCore.blacklisted_api_key_indices.discard(idx)
+        else:
+            AlumenCore.blacklisted_api_key_indices.add(idx)
+            # Se era quella attiva, ruota
+            if idx == AlumenCore.current_api_key_index:
+                AlumenCore.rotate_api_key(reason_override="Manuale da GUI")
+        
+        self._refresh_api_list()
+
+    def _api_reset(self):
+        AlumenCore.clear_blacklisted_keys()
+        self._refresh_api_list()
+        messagebox.showinfo("Info", "Blacklist resettata.")
+    # ----------------------------
+
+    def _run_dry_run_tool(self):
+        # Forza il flag dry_run a True e avvia il processo
+        self.var_dry.set(True)
+        self._start_process()
 
     def _update_extractor_ui(self, event=None):
         fmt = self.cmb_ex_fmt.get()
         self.f_ex_csv_opts.pack_forget()
         self.f_ex_json_opts.pack_forget()
-        if fmt == 'csv': self.f_ex_csv_opts.pack(fill="x", pady=5)
-        elif fmt == 'json': self.f_ex_json_opts.pack(fill="x", pady=5)
+        if fmt == 'csv': self.f_ex_csv_opts.pack(side="left", fill="x", expand=True)
+        elif fmt == 'json': self.f_ex_json_opts.pack(side="left", padx=(5, 0), fill="x", expand=True)
 
     def _run_extractor_tool(self):
         s = self.ent_ex_src.get()
@@ -741,15 +1237,18 @@ class AlumenGUI:
         json_keys = self.ent_ex_json_keys.get_valid_value()
 
         self._show_frame("log")
+        self.status_var.set("Estrazione cache in corso...")
         threading.Thread(target=lambda: AlumenCore.run_cache_extractor(s, t, fmt, col_s, col_t, "utf-8", json_keys=json_keys), daemon=True).start()
     def _run_scanner_tool(self):
         inp = self.ent_input.get()
         api = self.ent_api.get()
         if not api and not self.api_file_path: messagebox.showerror("Errore", "API Key necessaria"); return
         fmt = self.cmb_scan_fmt.get()
+        self.status_var.set("Scansione termini in corso...")
         def _w():
             t = AlumenCore.run_term_scanner(inp, fmt, "utf-8")
             self.log_queue.put(f"Termini trovati (formato {fmt}):\n{t}")
+            self.status_var.set("Scansione completata")
         self._show_frame("log")
         threading.Thread(target=_w, daemon=True).start()
 
@@ -759,8 +1258,15 @@ class AlumenGUI:
         a.api_file = self.api_file_path
         a.api = None if a.api_file else self.ent_api.get()
         if not a.api and not a.api_file: messagebox.showerror("Errore", "Manca API Key!"); return
+        
+        a.use_ollama = self.var_ollama_enabled.get()
+        a.ollama_host = self.ent_ollama_host.get()
+        a.ollama_model = self.cmb_ollama_model.get()
         a.model_name = self.cmb_model.get()
-        a.input = self.ent_input.get()
+
+        if a.use_ollama and not a.ollama_model: messagebox.showerror("Errore", "Seleziona un modello Ollama!"); return
+
+        a.input = self.ent_input.get() # Fix: Aggiunto attributo input
         a.output_dir = self.ent_output.get()
         a.file_type = self.cmb_fmt.get()
         a.source_lang = self.ent_src.get()
@@ -794,23 +1300,26 @@ class AlumenGUI:
         except: a.max_cols = None
         try: a.max_entries = int(self.ent_maxentr.get_valid_value())
         except: a.max_entries = None
-
         a.persistent_cache = self.var_cache.get()
         a.rotate_on_limit_or_error = self.var_rotate.get()
         a.dry_run = self.var_dry.get()
         a.translation_only_output = self.var_transonly.get()
         a.server = self.var_server.get()
         a.telegram = self.var_tg_enabled.get()
+        a.telegram_token = self.ent_tg_token.get()
+        a.telegram_chat_id = self.ent_tg_chatid.get()
         a.resume = self.var_resume.get()
         a.enable_file_log = self.var_filelog.get()
         a.enable_file_context = self.var_file_ctx.get()
         a.full_context_sample = self.var_full_sample.get()
         a.reflect = self.var_reflect.get()
         a.fuzzy_match = self.var_fuzzy.get()
-        try: a.fuzzy_threshold = int(self.ent_fuzzy_threshold.get_valid_value())
-        except: a.fuzzy_threshold = 90
-        a.interactive = False # La GUI non è interattiva in senso CLI
-
+        a.shutdown = self.var_shutdown.get() # Fix: Aggiunto parametro shutdown
+        a.interactive = True # Fix: Abilita modalità interattiva per supportare pausa/skip
+        
+        # Excel params
+        a.xlsx_source_col = self.ent_xlsx_src.get_valid_value() if hasattr(self, 'ent_xlsx_src') else "A"
+        a.xlsx_target_col = self.ent_xlsx_tgt.get_valid_value() if hasattr(self, 'ent_xlsx_tgt') else "B"
 
         if a.file_type == "json" and not a.json_keys and not a.dry_run:
             messagebox.showerror("Errore", "JSON richiede chiavi!")
@@ -819,27 +1328,43 @@ class AlumenGUI:
         self.current_args = a
         self.stop_event.clear()
         self.pause_event.set() 
-        self.skip_api_event.clear()
         self.skip_event.clear()
         self.is_running = True
         self.btn_pause.config(state='normal', text="⏸ PAUSA", style='Warn.TButton')
-        self.btn_skip_file.config(state='normal')
-        self.btn_skip_api.config(state='normal')
+        self.btn_skip.config(state='normal')
         self.txt_log.configure(state='normal')
         self.txt_log.delete(1.0, tk.END)
         self.txt_log.configure(state='disabled')
         self._show_frame("log")
-        t = threading.Thread(target=AlumenCore.run_core_process, args=(a, self.log_queue, self.stop_event, self.pause_event, self.skip_event, self.skip_api_event), daemon=True)
+        self.status_var.set("Avvio traduzione...")
+        
+        # Avviso di avvio
+        messagebox.showinfo("Processo Avviato", "La traduzione è iniziata. Puoi monitorare l'avanzamento nella scheda 'Esecuzione'.")
+        
+        # Funzione wrapper per il thread che include la callback finale
+        def thread_wrapper():
+            AlumenCore.run_core_process(a, self.log_queue, self.stop_event, self.pause_event, self.skip_event)
+            self.root.after(0, self._on_process_finished)
+
+        t = threading.Thread(target=thread_wrapper, daemon=True)
         t.start()
 
+    def _on_process_finished(self):
+        """Callback eseguita nel thread principale alla fine del processo."""
+        self.is_running = False
+        self.status_var.set("Pronto")
+        messagebox.showinfo("Processo Terminato", "Il lavoro è stato completato.")
+
     def _collect_args(self):
-        # Helper per preview (copia della logica start_process)
         class Args: pass
         a = Args()
         a.game_name = self.ent_gamename.get_valid_value() if self.ent_gamename.get_valid_value() else "un videogioco generico"
         a.source_lang = self.ent_src.get()
         a.target_lang = self.ent_tgt.get()
         a.custom_prompt = self.ent_prompt.get_valid_value()
+        a.use_ollama = self.var_ollama_enabled.get()
+        a.ollama_model = self.cmb_ollama_model.get()
+        a.ollama_host = self.ent_ollama_host.get()
         a.prompt_context = self.ent_pctx.get_valid_value()
         a.glossary = self.ent_gloss.get()
         a.enable_file_context = self.var_file_ctx.get()
@@ -858,18 +1383,6 @@ class AlumenGUI:
         st.pack(fill="both", expand=True)
         st.insert(tk.END, preview_text)
         st.configure(state='disabled')
-
-    def _show_stats_window(self):
-        stats_text = AlumenCore._get_full_stats_text(is_telegram=False, for_gui=True)
-        top = tk.Toplevel(self.root)
-        top.title("Statistiche Dettagliate")
-        top.geometry("700x500")
-        top.configure(bg="#1e272e")
-        st = scrolledtext.ScrolledText(top, bg="#1e272e", fg="#fafafa", font=("Consolas", 10), padx=15, pady=15, relief="flat")
-        st.pack(fill="both", expand=True)
-        st.insert(tk.END, stats_text)
-        st.configure(state='disabled')
-
 
 if __name__ == "__main__":
     root = tk.Tk()
