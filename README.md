@@ -28,7 +28,7 @@ Supporta nativamente i formati **CSV, Excel (XLSX), JSON, PO (Gettext) e SRT (So
 
 ## Prerequisiti e Installazione
 
-Alumen richiede che **Python 3.10** o versioni successive sia installato sul sistema.
+Alumen richiede che **Python 3.10** o versioni successive siano installate sul sistema.
 
 ### Installazione delle Librerie
 Per utilizzare Alumen e tutte le sue funzionalità (incluso il supporto Excel e Telegram), è necessario installare le dipendenze tramite il terminale:
@@ -69,7 +69,7 @@ Qui si impostano i parametri fondamentali:
 *   **Lingue:** Definire la lingua di origine (es. "Inglese") e quella di destinazione (es. "Italiano").
 *   **Opzioni Specifiche:**
     *   *CSV:* Delimitatore e indice colonne.
-    *   *JSON:* Chiavi da tradurre (obbligatorio per i file JSON).
+    *   *JSON:* Chiavi da tradurre (obbligatorie per i file JSON).
 
 ### 2. Scheda Avanzate
 Qui si gestiscono le opzioni per la qualità e le prestazioni:
@@ -116,7 +116,7 @@ python AlumenCore.py --input "percorso/cartella" --file-type csv --api "LA_TUA_K
 *   `--rpm`: Limite di Richieste Per Minuto per evitare errori di quota.
 *   `--persistent-cache`: Abilita il salvataggio/caricamento della cache da `alumen_cache.json`.
 *   `--dry-run`: Esegue una simulazione. Legge i file e calcola costo e token senza tradurre nulla.
-*   `--reflect`: Attiva la modalità di auto-riflessione (vedi sezione Funzionalità Avanzate).
+*   `--reflect`: Attiva la modalità di autoriflessione (vedi sezione Funzionalità Avanzate).
 
 #### Opzioni Specifiche per Formato
 *   **CSV:**
@@ -127,7 +127,7 @@ python AlumenCore.py --input "percorso/cartella" --file-type csv --api "LA_TUA_K
     *   `--json-keys`: Lista chiavi da tradurre (es. `name,description`). Obbligatorio.
     *   `--match-full-json-path`: Se attivo, cerca la chiave includendo i genitori (es. `items.sword.name`).
 *   **Excel:**
-    *   `--xlsx-source-col`: Lettera colonna origine (es. A).
+    *   `--xlsx-source-col`: Lettera colonna di origine (es. A).
     *   `--xlsx-target-col`: Lettera colonna destinazione (es. B).
 
 ---
@@ -239,7 +239,7 @@ Il bot invierà notifiche sullo stato di avanzamento e accetterà comandi come:
 | **`--json-keys`** | **[Solo JSON, Obbligatorio]** Elenco di chiavi (separate da virgola) da tradurre. Supporta notazione a punto (es. `key1,path.to.key2`). | - |
 | **`--match-full-json-path`** | [Solo JSON] Richiede la corrispondenza del percorso completo della chiave (es. `parent.child.key`). | `False` |
 
-### Parametri di Traduzione
+### Parametri di traduzione
 
 | Argomento | Descrizione | Default |
 | :--- | :--- | :--- |
@@ -259,7 +259,7 @@ Il bot invierà notifiche sullo stato di avanzamento e accetterà comandi come:
 | Argomento | Descrizione | Default |
 | :--- | :--- | :--- |
 | **`--wrap-at`** | Lunghezza massima della riga per a capo automatico. | - |
-| **`--newline-char`** | Carattere da usare per l'a capo automatico. | `\n` |
+| **`--newline-char`** | Carattere da usare per il capo automatico. | `\n` |
 
 ### Utilità e Modalità Interattiva
 
@@ -269,7 +269,7 @@ Il bot invierà notifiche sullo stato di avanzamento e accetterà comandi come:
 | **`--interactive`** | Abilita comandi interattivi nella console. | `False` |
 | **`--telegram`** | Abilita il logging e i comandi tramite un bot Telegram. | `False` |
 | **`--resume`** | Tenta di riprendere la traduzione da file parziali (supportato per CSV). Per JSON/PO, riutilizza le traduzioni in cache. | `False` |
-| **`--rotate-on-limit-or-error`** | Passa alla API key successiva in caso di errore o limite RPM. | `False` |
+| **`--rotate-on-limit-or-error`** | Passa all'API key successiva in caso di errore o limite RPM. | `False` |
 | **`--persistent-cache`** | Attiva la cache persistente su file (`alumen_cache.json`). | `False` |
 | **`--server`** | non blacklista mai le API key per errori o limiti giornalieri, ma riprova all'infinito sulla stessa chiave. | `False` |
 
@@ -316,7 +316,7 @@ Lo script ha i suoi argomenti da riga di comando. L'uso base è:
 È necessario specificare i parametri di formato (es. `--json-keys` per JSON, `--source-col/--target-col` per CSV) e i parametri di traduzione (es. `--game-name`) affinché le chiavi di cache generate corrispondano a quelle che Alumen cercherà.
 Usa `python cache_extractor.py --help` per tutti i dettagli.
 
-## Esempi di Utilizzo
+## Esempi di utilizzo
 
 #### 1\. Traduzione PO con Contesto, Limiti e Controllo Telegram
 
@@ -328,7 +328,7 @@ py .\Alumen.py --file-type "po" --game-name "Yakuza 4 Remastered" --rpm 15 --ena
 
 #### 2\. Traduzione CSV standard con log e API multipla
 
-Traduce un CSV specificando la colonna di input e output, utilizzando una delle API Key disponibili e salvando un log.
+Traduci un CSV specificando la colonna di input e output, utilizzando una delle API Key disponibili e salvando un log.
 
 ```ps1
 python Alumen.py --file-type csv --translate-col 2 --output-col 4 --enable-file-log --api "key1...,key2..."
@@ -336,7 +336,7 @@ python Alumen.py --file-type csv --translate-col 2 --output-col 4 --enable-file-
 
 #### 3\. Traduzione JSON con percorso completo e wrapping
 
-Traduce chiavi specifiche in file JSON, richiedendo la corrispondenza del percorso completo e formattando l'output per non superare gli 80 caratteri.
+Traduci chiavi specifiche in file JSON, richiedendo la corrispondenza del percorso completo e formattando l'output per non superare gli 80 caratteri.
 
 ```ps1
 python Alumen.py --file-type json --json-keys "data.title,menu.help_text" --match-full-json-path --wrap-at 80
