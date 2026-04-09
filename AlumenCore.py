@@ -55,7 +55,7 @@ CACHE_FILE_NAME = "alumen_cache.json"
 DEFAULT_CACHE_FILE = CACHE_FILE_NAME # Alias per compatibilità GUI
 BASE_API_CALL_INTERVAL_SECONDS = 0.2
 FILE_CONTEXT_SAMPLE_SIZE = 15
-CURRENT_SCRIPT_VERSION = "2.5.0"
+CURRENT_SCRIPT_VERSION = "2.6.0"
 GITHUB_REPO = "zSavT/Alumen"
 ESTIMATED_CHARS_PER_TOKEN = 3.5
 
@@ -77,10 +77,14 @@ log_file_path = None
 translation_cache = {}
 BLACKLIST_TERMS = set(["Dummy", "dummy"])
 glossary_terms = {}  # Dizionario per il glossario
+style_guide_content = "" # Contenuto della guida di stile
 blacklisted_api_key_indices = set()
 api_call_counts = {}
 cache_hit_count = 0
 start_time = 0.0
+total_paused_time = 0.0
+pause_start_timestamp = 0.0
+final_elapsed_time = 0.0
 total_files_translated = 0
 total_entries_translated = 0
 last_cache_save_time = 0.0
@@ -180,6 +184,18 @@ def check_internet_connection():
     except OSError:
         return False
 
+def get_elapsed_time():
+    global start_time, total_paused_time, pause_start_timestamp, final_elapsed_time, script_is_paused
+    if start_time == 0.0:
+        return 0.0
+    if final_elapsed_time > 0.0:
+        return final_elapsed_time
+    
+    elapsed = time.time() - start_time - total_paused_time
+    if not script_is_paused.is_set() and pause_start_timestamp > 0.0:
+        elapsed -= (time.time() - pause_start_timestamp)
+    return max(0.0, elapsed)
+
 
 class SmartTimeRemainingColumn(ProgressColumn):
     """Renders estimated time remaining considering cached entries."""
@@ -261,6 +277,7 @@ def get_script_args_updated():
     translation_group.add_argument("--custom-prompt", type=str, default=None,
                                    help="Usa un prompt personalizzato. OBBLIGATORIO: includere '{text_to_translate}'.")
     translation_group.add_argument("--glossary", type=str, default=None, help="Percorso del file CSV del glossario (Originale,Traduzione).")
+    translation_group.add_argument("--style-guide", type=str, default=None, help="Percorso del file .txt con la guida di stile.") # NUOVO ARGOMENTO
     translation_group.add_argument("--translation-only-output", action="store_true",
                                    help="L'output conterrà solo i testi tradotti, uno per riga.")
     translation_group.add_argument("--rpm", type=int, default=None,
@@ -272,6 +289,7 @@ def get_script_args_updated():
     translation_group.add_argument("--reflect", action="store_true", help="Attiva Agentic Reflection (Traduzione + Critica). Raddoppia i costi.")
     translation_group.add_argument("--dry-run", action="store_true", help="Esegue una simulazione calcolando token e costi senza tradurre.")
     translation_group.add_argument("--fuzzy-match", action="store_true", help="Usa la cache anche per match parziali (sperimentale).")
+    translation_group.add_argument("--upload-to-gemini", action="store_true", help="Carica il file intero direttamente sui server Gemini per la traduzione (Ignora Excel).")
 
     translation_group.add_argument("--context-window", type=int, default=0,
                                    help="Dimensione (N) della 'finestra di contesto dinamica'. Aggiunge le ultime N traduzioni (coppie sorgente->destinazione) al prompt. Default: 0 (disabilitato). Riduce l'efficacia della cache.")
@@ -461,6 +479,23 @@ def load_glossary():
         console.print(f"📚 Glossario caricato: {len(glossary_terms)} termini.", style="green")
     except Exception as e:
         console.print(f"❌ Errore caricamento glossario: {e}", style="red")
+
+def load_style_guide():
+    global style_guide_content
+    style_guide_content = ""
+    if not script_args.style_guide: return
+    
+    if not os.path.exists(script_args.style_guide):
+        console.print(f"⚠️  File Style Guide '{script_args.style_guide}' non trovato.", style="yellow")
+        return
+
+    try:
+        with open(script_args.style_guide, 'r', encoding='utf-8') as f:
+            style_guide_content = f.read().strip()
+        if style_guide_content:
+            console.print(f"🎨 Style Guide caricata ({len(style_guide_content)} caratteri).", style="green")
+    except Exception as e:
+        console.print(f"❌ Errore caricamento Style Guide: {e}", style="red")
 
 
 def add_api_key(new_key, is_telegram: bool = False):
@@ -889,8 +924,7 @@ def rotate_api_key(triggered_by_user=False, reason_override=None):
 
 
 def show_stats(title="📊 STATISTICHE DI ESECUZIONE", is_telegram: bool = False):
-    end_time = time.time()
-    total_time = end_time - start_time
+    total_time = get_elapsed_time()
     total_api_calls = sum(api_call_counts.values())
     avg_time_per_file = 0.0
     if total_files_translated > 0: avg_time_per_file = total_time / total_files_translated
@@ -946,6 +980,7 @@ def show_stats(title="📊 STATISTICHE DI ESECUZIONE", is_telegram: bool = False
 
 def process_command(command_line: str, is_telegram: bool = False):
     global user_command_skip_api, user_command_skip_file
+    global pause_start_timestamp, total_paused_time, final_elapsed_time
     command_parts = command_line.split(maxsplit=1)
     command = command_parts[0].lower() if command_parts else ""
     output = ""
@@ -953,6 +988,7 @@ def process_command(command_line: str, is_telegram: bool = False):
     with command_lock:
         if command == "stop":
             graceful_exit_requested.set()
+            final_elapsed_time = get_elapsed_time()
             output = "➡️  Comando ricevuto: lo script terminerà dopo il file attuale."
         elif command == "log":
             if len(command_parts) > 1 and command_parts[1].strip():
@@ -979,10 +1015,12 @@ def process_command(command_line: str, is_telegram: bool = False):
                 output = "⚠️  Comando non valido. Usa 'skip api' o 'skip file'."
         elif command == "pause":
             script_is_paused.clear()
+            pause_start_timestamp = time.time()
             output = "⏳ SCRIPT IN PAUSA. Invia 'resume' per continuare."
             if not is_telegram: show_stats("📊 STATISTICHE AL MOMENTO DELLA PAUSA")
         elif command == "resume":
             script_is_paused.set()
+            total_paused_time += time.time() - pause_start_timestamp
             output = "▶️  Script in esecuzione..."
         elif command == "stats":
             return show_stats("📊 STATISTICHE ATTUALI", is_telegram=is_telegram)
@@ -1441,6 +1479,13 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
             gloss_str = json.dumps(glossary_terms, ensure_ascii=False, indent=2)
             prompt_lines.append(gloss_str)
             prompt_lines.append("--- FINE GLOSSARIO ---\n")
+        
+        # --- MODIFICA: Iniezione Style Guide ---
+        if style_guide_content:
+            prompt_lines.append("\n--- GUIDA DI STILE ---")
+            prompt_lines.append(style_guide_content)
+            prompt_lines.append("--- FINE GUIDA DI STILE ---\n")
+        # ---------------------------------------
 
         prompt_base = " ".join(prompt_lines)
 
@@ -1478,6 +1523,7 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
                     f"Traduzione proposta: {translated_text}\n"
                     f"Contesto: {args.game_name}\n"
                     "Identifica eventuali errori grammaticali, di tono o incongruenze con il glossario. "
+                    "Verifica che il genere sia coerente e che i termini tecnici siano rispettati. "
                     "Se la traduzione è perfetta, restituiscila invariata. Altrimenti, fornisci SOLO la versione corretta."
                 )
                 # Chiamata extra per la reflection
@@ -2286,6 +2332,51 @@ def traduci_testo_srt(input_file, output_file, args):
     with command_lock:
         if user_command_skip_file: user_command_skip_file = False
 
+def translate_file_via_upload(input_file, output_file, args):
+    global current_api_key_index, api_call_counts, model, total_files_translated
+    file_basename = os.path.basename(input_file)
+    console.print(f"  [cyan]⬆️  Caricamento del file intero '{file_basename}' sui server Gemini...[/]")
+    write_to_log(f"Avvio traduzione via upload per: {input_file}")
+
+    try:
+        uploaded_file = genai.upload_file(path=input_file)
+        console.print(f"  [green]✅ File caricato con successo (URI: {uploaded_file.uri})[/]")
+        
+        prompt = (
+            f"Il tuo compito è tradurre il file allegato da {args.source_lang} a {args.target_lang}.\n"
+            f"REGOLE FONDAMENTALI:\n"
+            f"1. Devi mantenere ESATTAMENTE la struttura originale del file ({args.file_type}). Non alterare chiavi, tag, colonne o ID.\n"
+            f"2. Restituisci SOLO il testo tradotto pronto per essere salvato. Non includere introduzioni, conclusioni o blocchi markdown (come ```{args.file_type}).\n"
+        )
+        if args.game_name: prompt += f"3. Il contesto è il videogioco '{args.game_name}'. Usa una terminologia adeguata.\n"
+        if args.custom_prompt: prompt += f"4. Istruzioni extra: {args.custom_prompt}\n"
+        
+        console.print("  [cyan]➡️  Elaborazione della traduzione in corso...[/]")
+        response = model.generate_content([uploaded_file, prompt])
+        
+        if not args.ollama_model:
+            api_call_counts[current_api_key_index] += 1
+            
+        if not response or not hasattr(response, 'text'):
+            raise ValueError("Risposta vuota dall'API.")
+            
+        out_text = response.text.strip()
+        if out_text.startswith("```"):
+            lines = out_text.split("\n")
+            if len(lines) >= 2: out_text = "\n".join(lines[1:-1])
+                
+        with open(output_file, 'w', encoding=args.encoding) as f:
+            f.write(out_text)
+            
+        console.print(f"  [green]✅ Traduzione ricevuta e salvata in '{output_file}'.[/]")
+    except Exception as e:
+        console.print(f"  [red]🛑 Errore durante la traduzione via upload: {e}[/]")
+        write_to_log(f"Errore upload Gemini per {file_basename}: {e}")
+    finally:
+        try:
+            genai.delete_file(uploaded_file.name)
+            console.print(f"  [dim]🗑️  File eliminato in sicurezza dai server Gemini.[/]")
+        except: pass
 
 def process_files_recursively(args):
     global user_command_skip_file, total_files_translated, current_file_total_entries, current_file_processed_entries
@@ -2381,16 +2472,21 @@ def process_files_recursively(args):
             console.print(
                 f"⚠️  [yellow]Attenzione: Resume mode per '{args.file_type}' potrebbe sovrascrivere il file '{output_path}'.[/]")
         try:
-            if args.file_type == 'csv':
-                traduci_testo_csv(input_path, output_path, args)
-            elif args.file_type == 'json':
-                traduci_testo_json(input_path, output_path, args)
-            elif args.file_type == 'po':
-                traduci_testo_po(input_path, output_path, args)
-            elif args.file_type == 'xlsx':
-                traduci_testo_xlsx(input_path, output_path, args)
-            elif args.file_type == 'srt':
-                traduci_testo_srt(input_path, output_path, args)
+            if getattr(args, 'upload_to_gemini', False) and not args.ollama_model and args.file_type != 'xlsx':
+                translate_file_via_upload(input_path, output_path, args)
+            else:
+                if getattr(args, 'upload_to_gemini', False) and args.file_type == 'xlsx':
+                    console.print("⚠️  [yellow]Il formato XLSX è binario e non può essere ricostruito tramite upload. Uso metodo standard.[/]")
+                if args.file_type == 'csv':
+                    traduci_testo_csv(input_path, output_path, args)
+                elif args.file_type == 'json':
+                    traduci_testo_json(input_path, output_path, args)
+                elif args.file_type == 'po':
+                    traduci_testo_po(input_path, output_path, args)
+                elif args.file_type == 'xlsx':
+                    traduci_testo_xlsx(input_path, output_path, args)
+                elif args.file_type == 'srt':
+                    traduci_testo_srt(input_path, output_path, args)
 
             # La funzione `traduci_...` ritorna None se il file è stato saltato
             if os.path.exists(output_path):
@@ -2567,16 +2663,20 @@ def run_core_process(args, log_queue, stop_event, pause_event, skip_event):
     """
     global script_args, gui_log_queue, graceful_exit_requested, script_is_paused, user_command_skip_file, global_skip_event
     global start_time, total_files_translated, total_entries_translated
+    global total_paused_time, pause_start_timestamp, final_elapsed_time
     
     # Reset stato
     script_args = args
     gui_log_queue = log_queue
     graceful_exit_requested = stop_event
     script_is_paused = pause_event # Nota: nella GUI pause_event è set() quando running, clear() quando pausa.
-    global_skip_event = skip_event
+    # AlumenCore usa script_is_paused.wait() che blocca se clear. Quindi la logica è compatibile.
     
     # Setup iniziale
     start_time = time.time()
+    total_paused_time = 0.0
+    pause_start_timestamp = 0.0
+    final_elapsed_time = 0.0
     total_files_translated = 0
     total_entries_translated = 0
     
@@ -2593,6 +2693,7 @@ def run_core_process(args, log_queue, stop_event, pause_event, skip_event):
         initialize_api_keys_and_model()
         load_persistent_cache()
         load_glossary()
+        load_style_guide() # Aggiunto caricamento Style Guide
         
         # Loop principale
         process_files_recursively(args)
@@ -2601,6 +2702,7 @@ def run_core_process(args, log_queue, stop_event, pause_event, skip_event):
         write_to_log(f"Errore fatale nel processo: {e}")
         console.print_exception()
     finally:
+        final_elapsed_time = get_elapsed_time()
         save_persistent_cache(force=True)
         show_stats()
         if telegram_app: telegram_bot.stop_bot()
@@ -2633,6 +2735,9 @@ if __name__ == "__main__":
 
     script_is_paused.set()
     start_time = time.time()
+    total_paused_time = 0.0
+    pause_start_timestamp = 0.0
+    final_elapsed_time = 0.0
     if args_parsed_main.enable_file_log: setup_log_file()
 
     telegram_app = None
@@ -2642,6 +2747,7 @@ if __name__ == "__main__":
     initialize_api_keys_and_model()
     load_persistent_cache()
     load_glossary()
+    load_style_guide() # Aggiunto caricamento Style Guide
 
     cmd_thread = None
     if args_parsed_main.interactive:
@@ -2655,6 +2761,7 @@ if __name__ == "__main__":
         console.print("\n\n[bold red]🛑 Interruzione da tastiera (Ctrl+C) rilevata. Chiusura controllata in corso...[/]")
         write_to_log("INTERRUZIONE UTENTE: Rilevato Ctrl+C. Avvio chiusura controllata.")
     finally:
+        final_elapsed_time = get_elapsed_time()
         if args_parsed_main.shutdown and not interrupted and telegram_app:
             telegram_bot.send_telegram_notification(
                 "⚠️ *Spegnimento PC programmato.*\nIl computer si spegnerà tra 60 secondi dopo la chiusura dello script.")

@@ -113,7 +113,7 @@ class ScrollableFrame(ttk.Frame):
 class AlumenGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Alumen v2.5.0 - AI Translation Suite")
+        self.root.title("Alumen v2.6.0 - AI Translation Suite")
         self.root.geometry("1280x950")
         self.root.configure(bg=C_MAIN_BG)
         
@@ -571,6 +571,7 @@ class AlumenGUI:
         self.var_reflect = tk.BooleanVar(value=False)
         self.var_fuzzy = tk.BooleanVar(value=False)
         self.var_shutdown = tk.BooleanVar(value=False)
+        self.var_upload = tk.BooleanVar(value=False)
         
         checks = [
             ("Salva Cache", self.var_cache, "Salva le traduzioni per non ripeterle."),
@@ -582,7 +583,8 @@ class AlumenGUI:
             ("File Log (log.txt)", self.var_filelog, "Salva il log su file."),
             ("Agentic Reflection", self.var_reflect, "L'AI ricontrolla la propria traduzione (2x costo)."),
             ("Fuzzy Match Cache", self.var_fuzzy, "Usa la cache anche per frasi simili (maiuscole/punteggiatura)."),
-            ("Spegnimento Auto", self.var_shutdown, "Spegne il PC al termine del lavoro.")
+            ("Spegnimento Auto", self.var_shutdown, "Spegne il PC al termine del lavoro."),
+            ("Upload a Gemini", self.var_upload, "Carica l'intero file su Gemini invece di tradurre riga per riga.")
         ]
         for i, (txt, var, tip) in enumerate(checks):
             cmd = self._update_ui_states if txt == "Salva Cache" else None
@@ -646,6 +648,18 @@ class AlumenGUI:
         if os.path.exists("glossary.csv"): self.ent_gloss.insert(0, "glossary.csv")
         ttk.Button(f_glo_in, text="...", width=3, command=lambda: self._browse_file(self.ent_gloss)).pack(side="right", padx=(5,0))
         ToolTip(self.ent_gloss, "File CSV con termini forzati (Originale,Traduzione).")
+        
+        # --- MODIFICA: STYLE GUIDE ---
+        f_style = tk.Frame(f_files, bg=C_CARD_BG)
+        f_style.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        ttk.Label(f_style, text="Style Guide (.txt)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        f_style_in = tk.Frame(f_style, bg=C_CARD_BG)
+        f_style_in.pack(fill="x", pady=(2,0))
+        self.ent_style = ttk.Entry(f_style_in)
+        self.ent_style.pack(side="left", fill="x", expand=True)
+        ttk.Button(f_style_in, text="...", width=3, command=lambda: self._browse_file(self.ent_style)).pack(side="right", padx=(5,0))
+        ToolTip(self.ent_style, "File di testo con istruzioni di stile aggiuntive.")
+        # -----------------------------
 
         f_ca = tk.Frame(f_files, bg=C_CARD_BG)
         f_ca.pack(side="left", fill="x", expand=True)
@@ -1037,9 +1051,7 @@ class AlumenGUI:
         tok_out = AlumenCore.total_output_tokens
         api_calls = sum(AlumenCore.api_call_counts.values())
         
-        elapsed = 0
-        if AlumenCore.start_time > 0:
-            elapsed = int(time.time() - AlumenCore.start_time)
+        elapsed = int(AlumenCore.get_elapsed_time())
         
         h, r = divmod(elapsed, 3600)
         m, s = divmod(r, 60)
@@ -1098,11 +1110,13 @@ class AlumenGUI:
         if not self.is_running: return
         if self.pause_event.is_set():
             self.pause_event.clear() # Pause
+            AlumenCore.pause_start_timestamp = time.time()
             self.btn_pause.config(text="▶ RIPRENDI", style='Action.TButton')
             self.status_var.set("Processo in PAUSA")
             self.log_queue.put("⏸️ Richiesta di PAUSA inviata...") # Feedback immediato
         else:
             self.pause_event.set() # Resume
+            AlumenCore.total_paused_time += (time.time() - AlumenCore.pause_start_timestamp)
             self.btn_pause.config(text="⏸ PAUSA", style='Warn.TButton')
             self.status_var.set("Processo RIPRESO")
             self.log_queue.put("▶️ Richiesta di RIPRESA inviata...") # Feedback immediato
@@ -1114,6 +1128,7 @@ class AlumenGUI:
     def _stop_process(self):
         if self.stop_event.is_set(): return
         self.stop_event.set()
+        AlumenCore.final_elapsed_time = AlumenCore.get_elapsed_time()
         self.log_queue.put("🛑 Richiesta di STOP inviata...") # Feedback immediato
         self.is_running = False
         self.btn_pause.config(state='disabled')
@@ -1283,6 +1298,7 @@ class AlumenGUI:
         a.json_keys = self.ent_jkeys.get_valid_value()
         a.match_full_json_path = self.var_jmatch.get()
         a.glossary = self.ent_gloss.get()
+        a.style_guide = self.ent_style.get() # Fix: Aggiunto parametro style_guide
         a.cache_file = self.ent_cache_file.get()
         a.custom_prompt = self.ent_prompt.get_valid_value()
         a.prompt_context = self.ent_pctx.get_valid_value()
@@ -1315,6 +1331,7 @@ class AlumenGUI:
         a.reflect = self.var_reflect.get()
         a.fuzzy_match = self.var_fuzzy.get()
         a.shutdown = self.var_shutdown.get() # Fix: Aggiunto parametro shutdown
+        a.upload_to_gemini = self.var_upload.get()
         a.interactive = True # Fix: Abilita modalità interattiva per supportare pausa/skip
         
         # Excel params
@@ -1351,6 +1368,7 @@ class AlumenGUI:
 
     def _on_process_finished(self):
         """Callback eseguita nel thread principale alla fine del processo."""
+        AlumenCore.final_elapsed_time = AlumenCore.get_elapsed_time()
         self.is_running = False
         self.status_var.set("Pronto")
         messagebox.showinfo("Processo Terminato", "Il lavoro è stato completato.")
