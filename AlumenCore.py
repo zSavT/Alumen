@@ -62,9 +62,24 @@ ESTIMATED_CHARS_PER_TOKEN = 3.5
 # Prezzi indicativi per 1 Milione di Token (Input / Output) - Aggiornati a listino standard
 PRICING_TABLE = {
     "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
-    "gemini-1.5-pro":   {"input": 3.50,  "output": 10.50},
+    "gemini-1.5-flash-8b": {"input": 0.0375, "output": 0.15},
+    "gemini-1.5-pro":   {"input": 1.25,  "output": 5.00},
     "gemini-1.0-pro":   {"input": 0.50,  "output": 1.50},
-    "gemini-2.0-flash": {"input": 0.10,  "output": 0.40}, # Stima basata su 1.5 Flash (spesso simile o poco più)
+    "gemini-2.0-flash": {"input": 0.10,  "output": 0.40},
+    "gemini-2.0-flash-lite": {"input": 0.075, "output": 0.30},
+    "gemini-2.0-pro":   {"input": 1.25,  "output": 5.00},
+    
+    # Linea 2.5
+    "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
+    "gemini-2.5-flash": {"input": 0.30,  "output": 2.50},
+    "gemini-2.5-pro":   {"input": 1.25,  "output": 10.00},
+    
+    # Linea 3.0 e 3.1
+    "gemini-3.0-flash": {"input": 0.50,  "output": 3.00},
+    "gemini-3.0-pro":   {"input": 2.00,  "output": 12.00},
+    "gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50},
+    "gemini-3.1-flash": {"input": 0.50,  "output": 3.00}, # Stima base (come 3.0 Flash)
+    "gemini-3.1-pro":   {"input": 2.00,  "output": 12.00},
 }
 
 # ----- Variabili Globali -----
@@ -265,8 +280,8 @@ def get_script_args_updated():
     json_options_group.add_argument("--match-full-json-path", action="store_true",
                                     help="[Solo JSON] Per le chiavi JSON, richiede la corrispondenza del percorso completo della chiave (es. 'parent.child.key'), invece del solo nome della chiave.")
     
-    xlsx_options_group.add_argument("--xlsx-source-col", type=str, default="A", help="[Solo XLSX] Lettera colonna origine (es. A).")
-    xlsx_options_group.add_argument("--xlsx-target-col", type=str, default="B", help="[Solo XLSX] Lettera colonna destinazione (es. B).")
+    xlsx_options_group.add_argument("--xlsx-source-col", type=str, default="A", help="[Solo XLSX] Lettera colonna origine. Supporta liste (es. A,C).")
+    xlsx_options_group.add_argument("--xlsx-target-col", type=str, default="B", help="[Solo XLSX] Lettera colonna destinazione. Supporta liste.")
 
     translation_group.add_argument("--game-name", type=str, default="un videogioco generico",
                                    help="Nome del gioco per contestualizzare la traduzione.")
@@ -2154,19 +2169,25 @@ def traduci_testo_xlsx(input_file, output_file, args):
 
     # Converti lettere colonna in indici 1-based
     try:
-        src_col_idx = openpyxl.utils.column_index_from_string(args.xlsx_source_col)
-        tgt_col_idx = openpyxl.utils.column_index_from_string(args.xlsx_target_col)
+        src_cols_str = [c.strip() for c in str(args.xlsx_source_col).split(',') if c.strip()]
+        tgt_cols_str = [c.strip() for c in str(args.xlsx_target_col).split(',') if c.strip()]
+        if len(tgt_cols_str) < len(src_cols_str):
+            tgt_cols_str.extend([tgt_cols_str[-1]] * (len(src_cols_str) - len(tgt_cols_str)))
+            
+        src_col_indices = [openpyxl.utils.column_index_from_string(c) for c in src_cols_str]
+        tgt_col_indices = [openpyxl.utils.column_index_from_string(c) for c in tgt_cols_str]
     except Exception as e:
         log_critical_error_and_exit(f"Errore indici colonne Excel: {e}")
 
-    rows_to_process = []
+    tasks_to_process = []
     for row in ws.iter_rows(min_row=1):
-        if len(row) >= src_col_idx:
-            cell = row[src_col_idx - 1]
-            if cell.value and determine_if_translatable(str(cell.value)):
-                rows_to_process.append(row)
+        for sc, tc in zip(src_col_indices, tgt_col_indices):
+            if len(row) >= sc:
+                cell = row[sc - 1]
+                if cell.value and determine_if_translatable(str(cell.value)):
+                    tasks_to_process.append((row, sc, tc))
 
-    current_file_total_entries = len(rows_to_process)
+    current_file_total_entries = len(tasks_to_process)
     
     if max_entries_limit is not None and max_entries_limit > 0 and current_file_total_entries > max_entries_limit:
         console.print(f"⏭️  [yellow]SKIP:[/] File '{file_basename}' troppo grande ({current_file_total_entries}).")
@@ -2176,7 +2197,7 @@ def traduci_testo_xlsx(input_file, output_file, args):
     dynamic_context_window = deque(maxlen=args.context_window)
     
     # Cache check list
-    is_cached_list = [is_text_in_cache(str(r[src_col_idx-1].value), args) for r in rows_to_process]
+    is_cached_list = [is_text_in_cache(str(r[sc-1].value), args) for r, sc, tc in tasks_to_process]
 
     with Progress(
             SpinnerColumn(),
@@ -2189,7 +2210,7 @@ def traduci_testo_xlsx(input_file, output_file, args):
     ) as progress:
         task = progress.add_task(f"[cyan]XLSX '{file_basename}'[/]", total=current_file_total_entries)
 
-        for row in rows_to_process:
+        for row, sc, tc in tasks_to_process:
             # --- MODIFICA: Controllo segnali (Stop/Skip) ---
             try:
                 check_signals()
@@ -2202,11 +2223,6 @@ def traduci_testo_xlsx(input_file, output_file, args):
 
             src_cell = row[src_col_idx - 1]
             original_text = str(src_cell.value)
-            
-            # Assicurati che la riga abbia abbastanza celle
-            while len(row) < tgt_col_idx:
-                # Questo è tricky con iter_rows, meglio usare ws.cell()
-                pass 
             
             # Usa coordinate dirette per scrittura
             tgt_cell = ws.cell(row=src_cell.row, column=tgt_col_idx)
@@ -2408,13 +2424,22 @@ def process_files_recursively(args):
                     except: pass
         
         est_tokens = int(total_chars / ESTIMATED_CHARS_PER_TOKEN)
-        est_cost = (est_tokens / 1_000_000) * 0.35 # Prezzo indicativo Gemini Flash
+        
+        # Calcolo dinamico del costo
+        model_price = {"input": 0.10, "output": 0.40} # Default gemini-2.0-flash
+        clean_model_name = args.model_name.lower().replace("-preview", "").replace("-experimental", "")
+        for k in sorted(PRICING_TABLE.keys(), key=len, reverse=True):
+            if k in clean_model_name:
+                model_price = PRICING_TABLE[k]
+                break
+                
+        est_cost = (est_tokens / 1_000_000) * model_price["input"]
         
         report = (
             f"File Trovati: {file_count}\n"
             f"Caratteri Totali: {total_chars:,}\n"
-            f"Token Stimati: {est_tokens:,}\n"
-            f"Costo Stimato (Gemini Flash): ~${est_cost:.4f}"
+            f"Token Stimati (Input): {est_tokens:,}\n"
+            f"Costo Stimato ({args.model_name}): ~${est_cost:.4f}"
         )
         
         table = Table(title="Riepilogo Dry Run", box=ROUNDED) # Fix: box=ROUNDED
@@ -2422,8 +2447,8 @@ def process_files_recursively(args):
         table.add_column("Valore Stimato", style="bold white")
         table.add_row("File Trovati", str(file_count))
         table.add_row("Caratteri Totali", f"{total_chars:,}")
-        table.add_row("Token Stimati", f"{est_tokens:,}")
-        table.add_row("Costo Stimato (Gemini Flash)", f"~${est_cost:.4f}")
+        table.add_row("Token Stimati (Input)", f"{est_tokens:,}")
+        table.add_row(f"Costo Stimato ({args.model_name})", f"~${est_cost:.4f}")
         console.print(table)
         
         write_to_log(report) # Invia report alla GUI
@@ -2605,8 +2630,8 @@ def run_term_scanner(input_dir, fmt, enc):
         return "Errore: Cartella di input non valida."
     
     # Inizializza AI se non fatto (per uso standalone)
-    if not model:
-        return "Errore: Modello AI non inizializzato. Configura prima l'API Key."
+    if not model and not (script_args and script_args.ollama_model):
+        return "Errore: Modello AI non inizializzato. Configura prima l'API Key o Ollama."
 
     sample_texts = []
     files_scanned = 0

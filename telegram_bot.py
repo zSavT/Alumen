@@ -72,7 +72,7 @@ def execute_core_command(command: str):
             
             elapsed_str = "0s"
             if AlumenCore.start_time > 0:
-                elapsed = int(time.time() - AlumenCore.start_time)
+                elapsed = int(AlumenCore.get_elapsed_time())
                 h, r = divmod(elapsed, 3600)
                 m, s = divmod(r, 60)
                 elapsed_str = f"{h}h {m}m {s}s"

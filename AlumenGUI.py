@@ -528,28 +528,28 @@ class AlumenGUI:
         
         # Grid Layout 2x2 for CSV
         f_00 = self._make_grid_frame(f_csv, 0, 0)
-        ttk.Label(f_00, text="Delimitatore", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_00, text="Delimitatore CSV", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_delim = PlaceholderEntry(f_00, ",", width=5)
         self.ent_delim.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_delim, "Carattere separatore per CSV (es. , o ;).")
+        ToolTip(self.ent_delim, "Carattere che separa le colonne nel file CSV (es. virgola ',' o punto e virgola ';').")
 
         f_01 = self._make_grid_frame(f_csv, 0, 1)
-        ttk.Label(f_01, text="Col. Input (0=A)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_01, text="Indice Col. Origine (0=A)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_col = PlaceholderEntry(f_01, "3", width=5)
         self.ent_col.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_col, "Indice della colonna contenente il testo originale.")
+        ToolTip(self.ent_col, "Indice numerico della colonna da tradurre. La prima colonna è 0.")
 
         f_10 = self._make_grid_frame(f_csv, 1, 0)
-        ttk.Label(f_10, text="Col. Output", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_10, text="Indice Col. Destinazione", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_col_out = PlaceholderEntry(f_10, "3", width=5)
         self.ent_col_out.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_col_out, "Indice della colonna dove scrivere la traduzione.")
+        ToolTip(self.ent_col_out, "Indice numerico della colonna in cui salvare la traduzione. Se uguale all'origine, sovrascriverà i testi originali.")
 
         f_11 = self._make_grid_frame(f_csv, 1, 1)
-        ttk.Label(f_11, text="Max Cols", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_11, text="Limite Max Colonne", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_maxcols = PlaceholderEntry(f_11, "None", width=5)
         self.ent_maxcols.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_maxcols, "Ignora righe con più di N colonne (utile per file corrotti).")
+        ToolTip(self.ent_maxcols, "Ignora le righe che hanno più di N colonne. Utile per saltare righe di commento mal formattate.")
 
         ttk.Separator(c_spec, orient="horizontal").pack(fill="x", pady=15)
 
@@ -558,15 +558,15 @@ class AlumenGUI:
         f_json.pack(fill="x")
         f_j_in = tk.Frame(f_json, bg=C_CARD_BG)
         f_j_in.pack(side="left", fill="x", expand=True)
-        ttk.Label(f_j_in, text="JSON Keys (es. title, desc)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
-        self.ent_jkeys = PlaceholderEntry(f_j_in, "title, description")
+        ttk.Label(f_j_in, text="Chiavi JSON da Tradurre", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_jkeys = PlaceholderEntry(f_j_in, "es. title, description, text")
         self.ent_jkeys.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_jkeys, "Lista di chiavi JSON da tradurre, separate da virgola.")
+        ToolTip(self.ent_jkeys, "Elenco delle chiavi JSON che contengono testo da tradurre (separate da virgola). Obbligatorio per elaborare i JSON.")
         
         self.var_jmatch = tk.BooleanVar(value=False)
-        cb_j = ttk.Checkbutton(f_json, text="Match Full Path", variable=self.var_jmatch, style="Card.TCheckbutton")
+        cb_j = ttk.Checkbutton(f_json, text="Corrispondenza Percorso Esatto", variable=self.var_jmatch, style="Card.TCheckbutton")
         cb_j.pack(side="left", padx=20, pady=(15,0))
-        ToolTip(cb_j, "Se attivo, cerca la chiave includendo il percorso completo (es. items.sword.name).")
+        ToolTip(cb_j, "Se attivo, controlla l'intera gerarchia della chiave (es. 'dialogue.npc.text' invece di considerare qualsiasi chiave 'text').")
 
         ttk.Separator(c_spec, orient="horizontal").pack(fill="x", pady=15)
 
@@ -576,30 +576,30 @@ class AlumenGUI:
         
         f_x1 = tk.Frame(f_xlsx, bg=C_CARD_BG)
         f_x1.pack(side="left", fill="x", expand=True)
-        ttk.Label(f_x1, text="Col. Origine (es. A)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_x1, text="Lettera Col. Origine (es. A,C)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_xlsx_src = PlaceholderEntry(f_x1, "A", width=5)
         self.ent_xlsx_src.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_xlsx_src, "Lettera della colonna Excel con il testo originale.")
+        ToolTip(self.ent_xlsx_src, "Lettera della colonna originale. Usa la virgola per indicarne multiple (es. A,C,E).")
 
         f_x2 = tk.Frame(f_xlsx, bg=C_CARD_BG)
         f_x2.pack(side="left", fill="x", expand=True, padx=(20, 0))
-        ttk.Label(f_x2, text="Col. Destinazione (es. B)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_x2, text="Lettera Col. Destinaz. (es. B,D)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_xlsx_tgt = PlaceholderEntry(f_x2, "B", width=5)
         self.ent_xlsx_tgt.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_xlsx_tgt, "Lettera della colonna Excel dove scrivere la traduzione.")
+        ToolTip(self.ent_xlsx_tgt, "Lettera di destinazione. Usa la virgola (es. B,D,F) per abbinarle alle origini.")
 
         # CARD: PROMPT
         c_ctx = self._create_card(container, "Prompt Engineering")
         
-        ttk.Label(c_ctx, text="Custom Prompt (Istruzioni Extra)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
-        self.ent_prompt = PlaceholderEntry(c_ctx, "Es. 'Usa un tono medievale', 'Non tradurre i nomi propri'")
+        ttk.Label(c_ctx, text="Custom Prompt (SOVRASCRIVE regole base)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_prompt = PlaceholderEntry(c_ctx, "ATTENZIONE: Sostituisce il prompt base. Devi includere '{text_to_translate}'")
         self.ent_prompt.pack(fill="x", pady=(5, 15))
-        ToolTip(self.ent_prompt, "Istruzioni aggiuntive per guidare lo stile dell'AI.")
+        ToolTip(self.ent_prompt, "⚠️ Sostituisce in blocco il prompt di base di Alumen. Usa solo per esperimenti estremi. Richiede {text_to_translate}.")
         
-        ttk.Label(c_ctx, text="Contesto Fisso (Lore/Trama)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
-        self.ent_pctx = PlaceholderEntry(c_ctx, "Es. 'Il protagonista è un cavaliere...'")
+        ttk.Label(c_ctx, text="Contesto Fisso (Aggiunta rapida)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        self.ent_pctx = PlaceholderEntry(c_ctx, "Es. 'Il protagonista è una donna', 'Ambientazione sci-fi'")
         self.ent_pctx.pack(fill="x", pady=(5, 15))
-        ToolTip(self.ent_pctx, "Informazioni di contesto fisse inviate con ogni richiesta.")
+        ToolTip(self.ent_pctx, "Aggiunge una singola frase informativa alla fine delle regole standard per chiarire la trama.")
         
         f_chk_ctx = tk.Frame(c_ctx, bg=C_CARD_BG)
         f_chk_ctx.pack(fill="x")
@@ -712,13 +712,13 @@ class AlumenGUI:
         # --- MODIFICA: STYLE GUIDE ---
         f_style = tk.Frame(f_files, bg=C_CARD_BG)
         f_style.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        ttk.Label(f_style, text="Style Guide (.txt)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_style, text="Style Guide (.txt - Manuale Regole)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         f_style_in = tk.Frame(f_style, bg=C_CARD_BG)
         f_style_in.pack(fill="x", pady=(2,0))
         self.ent_style = ttk.Entry(f_style_in)
         self.ent_style.pack(side="left", fill="x", expand=True)
         ttk.Button(f_style_in, text="...", width=3, command=lambda: self._browse_file(self.ent_style)).pack(side="right", padx=(5,0))
-        ToolTip(self.ent_style, "File di testo con istruzioni di stile aggiuntive.")
+        ToolTip(self.ent_style, "Allega un file di testo con regole dettagliate di formattazione e tono di voce (es. dare del Voi, stile UI).")
         # -----------------------------
 
         f_ca = tk.Frame(f_files, bg=C_CARD_BG)
@@ -1388,13 +1388,13 @@ class AlumenGUI:
         a = Args()
         a.api_file = self.api_file_path
         a.api = None if a.api_file else self.ent_api.get()
-        if not a.api and not a.api_file: messagebox.showerror("Errore", "Manca API Key!"); return
         
         a.use_ollama = self.var_ollama_enabled.get()
-        a.ollama_host = self.ent_ollama_host.get()
-        a.ollama_model = self.cmb_ollama_model.get()
+        a.ollama_url = self.ent_ollama_host.get()
+        a.ollama_model = self.cmb_ollama_model.get() if a.use_ollama else None
         a.model_name = self.cmb_model.get()
 
+        if not a.use_ollama and not a.api and not a.api_file: messagebox.showerror("Errore", "Manca API Key!"); return
         if a.use_ollama and not a.ollama_model: messagebox.showerror("Errore", "Seleziona un modello Ollama!"); return
 
         a.input = self.ent_input.get() # Fix: Aggiunto attributo input
@@ -1497,8 +1497,8 @@ class AlumenGUI:
         a.target_lang = self.ent_tgt.get()
         a.custom_prompt = self.ent_prompt.get_valid_value()
         a.use_ollama = self.var_ollama_enabled.get()
-        a.ollama_model = self.cmb_ollama_model.get()
-        a.ollama_host = self.ent_ollama_host.get()
+        a.ollama_model = self.cmb_ollama_model.get() if a.use_ollama else None
+        a.ollama_url = self.ent_ollama_host.get()
         a.prompt_context = self.ent_pctx.get_valid_value()
         a.glossary = self.ent_gloss.get()
         a.enable_file_context = self.var_file_ctx.get()

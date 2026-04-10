@@ -141,21 +141,25 @@ def extract_from_xlsx(s_path, t_path, cache, args):
 
     # Converti lettere colonna (A, B) in indici 0-based
     try:
-        s_idx = openpyxl.utils.column_index_from_string(args.xlsx_source_col) - 1
-        t_idx = openpyxl.utils.column_index_from_string(args.xlsx_target_col) - 1
+        s_cols_str = [c.strip() for c in str(args.xlsx_source_col).split(',') if c.strip()]
+        t_cols_str = [c.strip() for c in str(args.xlsx_target_col).split(',') if c.strip()]
+        if len(t_cols_str) < len(s_cols_str): t_cols_str.extend([t_cols_str[-1]] * (len(s_cols_str) - len(t_cols_str)))
+        s_indices = [openpyxl.utils.column_index_from_string(c) - 1 for c in s_cols_str]
+        t_indices = [openpyxl.utils.column_index_from_string(c) - 1 for c in t_cols_str]
     except: print("  ❌ Colonne Excel non valide."); return
 
     added = 0
     # Itera sulle righe (zip per sicurezza)
     for r_s, r_t in zip(ws_s.iter_rows(), ws_t.iter_rows()):
-        if len(r_s) > s_idx and len(r_t) > t_idx:
-            src = r_s[s_idx].value
-            tgt = r_t[t_idx].value
-            if isinstance(src, str) and isinstance(tgt, str) and determine_if_translatable(src) and tgt.strip():
-                key = get_cache_key(src, args)
-                if key not in cache:
-                    cache[key] = tgt
-                    added += 1
+        for sc, tc in zip(s_indices, t_indices):
+            if len(r_s) > sc and len(r_t) > tc:
+                src = r_s[sc].value
+                tgt = r_t[tc].value
+                if isinstance(src, str) and isinstance(tgt, str) and determine_if_translatable(src) and tgt.strip():
+                    key = get_cache_key(src, args)
+                    if key not in cache:
+                        cache[key] = tgt
+                        added += 1
     print(f"  ✅ XLSX: Aggiunte {added} voci.")
 
 # --- Main ---
@@ -201,8 +205,8 @@ def main():
     c.add_argument("--delimiter", default=",")
     c.add_argument("--source-col", type=int, default=3, help="Index colonna originale (CSV)")
     c.add_argument("--target-col", type=int, default=3, help="Index colonna tradotta (CSV)")
-    c.add_argument("--xlsx-source-col", default="A", help="Lettera colonna originale (Excel)")
-    c.add_argument("--xlsx-target-col", default="B", help="Lettera colonna tradotta (Excel)")
+    c.add_argument("--xlsx-source-col", type=str, default="A", help="Lettera colonna/e originale Excel (es. A,C)")
+    c.add_argument("--xlsx-target-col", type=str, default="B", help="Lettera colonna/e tradotta Excel")
     c.add_argument("--no-header", action="store_true")
 
     j = parser.add_argument_group('JSON')
