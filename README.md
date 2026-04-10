@@ -1,7 +1,7 @@
 
 # Alumen - Suite di Traduzione AI Automatizzata
 
-Alumen è un software open-source progettato per automatizzare la localizzazione di progetti software e videoludici. Utilizza i modelli linguistici di Google Gemini per tradurre massivamente file di testo mantenendo il contesto, la formattazione e le variabili di codice.
+Alumen è un software open-source progettato per automatizzare la localizzazione di progetti software e videoludici. Utilizza i modelli linguistici di Google Gemini (o modelli AI eseguiti in locale tramite Ollama) per tradurre massivamente file di testo mantenendo il contesto, la formattazione e le variabili di codice.
 
 Il software è diviso in due componenti principali:
 1.  **AlumenGUI.py**: Un'interfaccia grafica per configurare ed eseguire le traduzioni senza usare il terminale.
@@ -77,10 +77,20 @@ Qui si gestiscono le opzioni per la qualità e le prestazioni:
 *   **Batch Size:** Numero di frasi inviate in una singola richiesta. Default: 30. Valori più alti aumentano la velocità ma consumano più token.
 *   **Cache Persistente:** Se attivo, salva le traduzioni su disco. Se si riavvia il programma, le frasi già tradotte non verranno inviate nuovamente all'API.
 
-### 3. Scheda Esecuzione
-*   **Log:** Mostra in tempo reale le operazioni svolte dal software.
-*   **Avvia Traduzione:** Lancia il processo.
-*   **Stop:** Interrompe il processo in modo sicuro.
+### 3. Scheda Gestione API
+Un pannello dedicato per visualizzare l'elenco delle chiavi API caricate. Da qui è possibile aggiungere nuove chiavi, rimuoverle, o forzarne l'inserimento in "Blacklist" per escluderle temporaneamente dalla rotazione in caso di errori persistenti.
+
+### 4. Scheda Strumenti
+Contiene utilità accessorie per il processo di traduzione:
+*   **Analisi Dry Run:** Simula il processo stimando il numero di token e i costi.
+*   **Estrattore Cache:** Crea un file cache confrontando una cartella di file in lingua originale con una cartella di file già tradotti.
+*   **Auto-Glossary Scanner:** Analizza i file di input usando l'AI per suggerire automaticamente Nomi Propri, Luoghi e Oggetti da inserire in un eventuale Glossario.
+
+### 5. Scheda Esecuzione
+*   **Console:** Mostra in tempo reale le operazioni (log colorati e formattati).
+*   **Dashboard Statistiche:** Mostra i file elaborati, token spesi, chiamate API e tempo impiegato.
+*   **Pulsanti di Controllo:** Avvia Processo, Pausa, Salta File, Stop.
+*   **Visualizza Prompt:** Permette di ispezionare l'esatto prompt inviato all'Intelligenza Artificiale per l'ultima riga elaborata.
 
 ---
 
@@ -99,6 +109,8 @@ python AlumenCore.py --input "percorso/cartella" --file-type csv --api "LA_TUA_K
 *   `--input`: Cartella contenente i file da tradurre. Default: `input`.
 *   `--api`: Chiavi API separate da virgola.
 *   `--model-name`: Modello Gemini da usare. Default: `gemini-2.0-flash`.
+*   `--ollama-model`: **[SPERIMENTALE]** Modello Ollama locale da usare (ignora API Gemini).
+*   `--ollama-url`: URL del server Ollama. Default: `http://localhost:11434`.
 *   `--enable-file-log`: Attiva la scrittura dei log su file `log.txt`.
 
 #### Gestione File
@@ -117,6 +129,8 @@ python AlumenCore.py --input "percorso/cartella" --file-type csv --api "LA_TUA_K
 *   `--persistent-cache`: Abilita il salvataggio/caricamento della cache da `alumen_cache.json`.
 *   `--dry-run`: Esegue una simulazione. Legge i file e calcola costo e token senza tradurre nulla.
 *   `--reflect`: Attiva la modalità di autoriflessione (vedi sezione Funzionalità Avanzate).
+*   `--upload-to-gemini`: Carica il file intero sui server di Gemini per tradurlo in blocco. Molto più veloce ma meno preciso nella gestione dei tag, sconsigliato per XLSX.
+*   `--fuzzy-match`: Usa la cache anche per match testuali parziali (ignora minuscole/maiuscole e punteggiatura).
 
 #### Opzioni Specifiche per Formato
 *   **CSV:**
@@ -214,6 +228,8 @@ Il bot invierà notifiche sullo stato di avanzamento e accetterà comandi come:
 | :--- | :--- | :--- |
 | **`--api`** | Specifica una o più chiavi API Gemini, separate da virgola. | - |
 | **`--model-name`** | Nome del modello Gemini da utilizzare. | `gemini-2.5-flash` |
+| **`--ollama-model`** | Specifica un modello locale via Ollama (disabilita chiavi API Google). | - |
+| **`--ollama-url`** | Indirizzo del server Ollama. | `http://localhost:11434` |
 
 ### Configurazione File e Formato
 
@@ -249,6 +265,7 @@ Il bot invierà notifiche sullo stato di avanzamento e accetterà comandi come:
 | **`--prompt-context`** | Aggiunge un'informazione contestuale extra a ogni prompt. | - |
 | **`--custom-prompt`** | Usa un prompt personalizzato. **OBBLIGATORIO:** includere `{text_to_translate}`. | - |
 | **`--translation-only-output`** | L'output (per CSV/JSON) conterrà solo i testi tradotti, uno per riga. | `False` |
+| **`--fuzzy-match`** | Sperimentale: Usa la cache anche per frasi non identiche (es. punteggiatura). | `False` |
 | **`--rpm`** | Numero massimo di richieste API a Gemini per minuto (Rate Limit). | Nessun limite |
 | **`--enable-file-context`** | **Abilita il Contesto Intelligente del File.** Analizza le prime 15 frasi del file per generare un contesto. | `False` |
 | **`--full-context-sample`** | **[Necessita `--enable-file-context`]** Utilizza **tutte** le frasi valide nel file per generare il contesto. | `False` |
@@ -268,9 +285,12 @@ Il bot invierà notifiche sullo stato di avanzamento e accetterà comandi come:
 | **`--enable-file-log`** | Attiva la scrittura di un log (`log.txt`). | `False` |
 | **`--interactive`** | Abilita comandi interattivi nella console. | `False` |
 | **`--telegram`** | Abilita il logging e i comandi tramite un bot Telegram. | `False` |
+| **`--telegram-token`** | Sovrascrive il token Bot Telegram specificato nel file JSON. | - |
+| **`--telegram-chat-id`** | Sovrascrive la Chat ID specificata nel file JSON. | - |
 | **`--resume`** | Tenta di riprendere la traduzione da file parziali (supportato per CSV). Per JSON/PO, riutilizza le traduzioni in cache. | `False` |
 | **`--rotate-on-limit-or-error`** | Passa all'API key successiva in caso di errore o limite RPM. | `False` |
 | **`--persistent-cache`** | Attiva la cache persistente su file (`alumen_cache.json`). | `False` |
+| **`--upload-to-gemini`** | Carica il file direttamente tramite l'API "File" di Gemini e chiede all'AI di tradurre in blocco. (Disabilitato per XLSX). | `False` |
 | **`--server`** | non blacklista mai le API key per errori o limiti giornalieri, ma riprova all'infinito sulla stessa chiave. | `False` |
 
 -----

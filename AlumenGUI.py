@@ -8,18 +8,19 @@ import json
 import time
 import AlumenCore
 
-# --- THEME CONFIGURATION (Modern Flat) ---
-C_ACCENT = "#0078D7"          # Windows 11 Blue
+# --- THEME CONFIGURATION (Full Dark Mode) ---
+C_ACCENT = "#0078D7"          
 C_ACCENT_HOVER = "#1984D8"
-C_SIDEBAR_BG = "#202020"      # Deep Dark Grey
-C_SIDEBAR_BTN_ACTIVE = "#323232"
-C_MAIN_BG = "#F3F3F3"         # Soft Light Grey
-C_CARD_BG = "#FFFFFF"         # Pure White
-C_TEXT_MAIN = "#1A1A1A"
-C_TEXT_SEC = "#5F6368"
+C_SIDEBAR_BG = "#151515"      
+C_SIDEBAR_BTN_ACTIVE = "#252526"
+C_MAIN_BG = "#1E1E1E"         
+C_CARD_BG = "#252526"         
+C_TEXT_MAIN = "#E0E0E0"
+C_TEXT_SEC = "#9E9E9E"
 C_TEXT_SIDEBAR = "#AAAAAA"
 C_TEXT_SIDEBAR_ACT = "#FFFFFF"
-C_BORDER = "#E0E0E0"
+C_BORDER = "#3E3E42"
+C_INPUT_BG = "#333337"
 
 # Semantic Colors
 C_SUCCESS = "#107C10"
@@ -27,14 +28,14 @@ C_WARN = "#D83B01"
 C_ERR = "#A80000"
 
 # Fonts
-F_H1 = ("Segoe UI", 22, "bold")
-F_H2 = ("Segoe UI", 11, "bold")
-F_BODY = ("Segoe UI", 10)
-F_SMALL = ("Segoe UI", 9)
+FONT_FAM = "Segoe UI"
+F_H1 = (FONT_FAM, 22, "bold")
+F_H2 = (FONT_FAM, 12, "bold")
+F_BODY = (FONT_FAM, 10)
+F_SMALL = (FONT_FAM, 9)
 F_MONO = ("Consolas", 10)
-F_ICON = ("Segoe UI Emoji", 12)
-F_SIDEBAR = ("Segoe UI", 11)
-F_STATS = ("Segoe UI", 14, "bold")
+F_SIDEBAR = (FONT_FAM, 11)
+F_STATS = (FONT_FAM, 14, "bold")
 
 class ToolTip:
     def __init__(self, widget, text):
@@ -52,8 +53,8 @@ class ToolTip:
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(tw, text=self.text, justify=tk.LEFT,
-                       background="#2D2D30", foreground="#FFFFFF",
-                       relief=tk.SOLID, borderwidth=0, font=F_SMALL, padx=10, pady=6)
+                       background="#151515", foreground="#E0E0E0",
+                       relief=tk.SOLID, borderwidth=1, font=F_SMALL, padx=10, pady=6)
         label.pack()
     def hide_tip(self, event=None):
         if self.tipwindow: self.tipwindow.destroy(); self.tipwindow = None
@@ -113,7 +114,7 @@ class ScrollableFrame(ttk.Frame):
 class AlumenGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Alumen v2.6.0 - AI Translation Suite")
+        self.root.title("Alumen v2.6.1 - AI Translation Suite")
         self.root.geometry("1280x950")
         self.root.configure(bg=C_MAIN_BG)
         
@@ -129,6 +130,9 @@ class AlumenGUI:
         self.is_running = False
         self.is_initialized = False
         
+        self.spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        self.spinner_idx = 0
+
         self._configure_styles()
         self._init_layout()
         self.is_initialized = True
@@ -138,6 +142,7 @@ class AlumenGUI:
         
         self.root.after(100, self._poll_log_queue)
         self.root.after(1000, self._update_stats)
+        self.root.after(100, self._update_spinner)
         self.root.after(2000, self._check_update_thread)
         self.root.after(100, self._update_ui_states)
 
@@ -153,28 +158,63 @@ class AlumenGUI:
         style.configure('CardHeader.TLabel', background=C_CARD_BG, foreground=C_ACCENT, font=F_H2)
         
         # Buttons
-        style.configure('TButton', font=F_BODY, borderwidth=0, background="#E1E1E1", foreground=C_TEXT_MAIN)
-        style.map('TButton', background=[('active', '#D1D1D1'), ('disabled', '#F0F0F0')])
+        style.configure('TButton', font=F_BODY, borderwidth=0, background="#3E3E42", foreground=C_TEXT_MAIN, padding=4)
+        style.map('TButton', background=[('active', '#4E4E52'), ('disabled', '#2D2D30')], foreground=[('disabled', '#666666')])
         
-        style.configure('Action.TButton', background=C_ACCENT, foreground="white", font=("Segoe UI", 10, "bold"))
-        style.map('Action.TButton', background=[('active', C_ACCENT_HOVER)])
+        BTN_F = ("Segoe UI", 11, "bold")
+        style.configure('Action.TButton', background="#238636", foreground="white", font=BTN_F, padding=12)
+        style.map('Action.TButton', background=[('active', "#2EA043"), ('disabled', '#2D2D30')], foreground=[('disabled', '#666666')])
         
-        style.configure('Danger.TButton', background=C_ERR, foreground="white", font=("Segoe UI", 10, "bold"))
-        style.map('Danger.TButton', background=[('active', "#800000")])
+        style.configure('Danger.TButton', background="#DA3633", foreground="white", font=BTN_F, padding=12)
+        style.map('Danger.TButton', background=[('active', "#F85149"), ('disabled', '#2D2D30')], foreground=[('disabled', '#666666')])
         
-        style.configure('Warn.TButton', background=C_WARN, foreground="white", font=("Segoe UI", 10, "bold"))
-        style.map('Warn.TButton', background=[('active', "#B03000")])
+        style.configure('Warn.TButton', background="#D29922", foreground="white", font=BTN_F, padding=12)
+        style.map('Warn.TButton', background=[('active', "#E3B341"), ('disabled', '#2D2D30')], foreground=[('disabled', '#666666')])
+        
+        style.configure('Secondary.TButton', background="#21262D", foreground=C_TEXT_MAIN, font=BTN_F, padding=12)
+        style.map('Secondary.TButton', background=[('active', '#4E4E52'), ('disabled', '#2D2D30')], foreground=[('disabled', '#666666')])
         
         # Inputs
-        style.configure('TEntry', padding=8, relief="flat", borderwidth=1, bordercolor=C_BORDER)
+        style.configure('TEntry', fieldbackground=C_INPUT_BG, foreground=C_TEXT_MAIN, padding=8, relief="flat", borderwidth=1, bordercolor=C_BORDER)
         style.map('TEntry', bordercolor=[('focus', C_ACCENT)])
         
-        style.configure('TCombobox', padding=8, relief="flat", borderwidth=1, bordercolor=C_BORDER)
-        style.map('TCombobox', fieldbackground=[('readonly', 'white')], selectbackground=[('readonly', C_ACCENT)])
+        style.configure('TCombobox', fieldbackground=C_INPUT_BG, background=C_INPUT_BG, foreground=C_TEXT_MAIN, padding=8, relief="flat", borderwidth=1, bordercolor=C_BORDER, arrowcolor=C_TEXT_MAIN)
+        style.map('TCombobox', 
+                  fieldbackground=[('readonly', C_INPUT_BG)], 
+                  selectbackground=[('readonly', C_INPUT_BG), ('focus', C_INPUT_BG)], 
+                  selectforeground=[('readonly', C_TEXT_MAIN), ('focus', C_TEXT_MAIN)], 
+                  background=[('active', '#3E3E42')])
 
-        # Checks & Radios
-        style.configure("Card.TCheckbutton", background=C_CARD_BG, foreground=C_TEXT_MAIN, font=F_BODY)
-        style.configure("Card.TRadiobutton", background=C_CARD_BG, foreground=C_TEXT_MAIN, font=F_BODY)
+        # Dropdown Menu (Listbox interno) Styling
+        self.root.option_add('*TCombobox*Listbox.background', '#2D2D30')
+        self.root.option_add('*TCombobox*Listbox.foreground', C_TEXT_MAIN)
+        self.root.option_add('*TCombobox*Listbox.selectBackground', C_ACCENT)
+        self.root.option_add('*TCombobox*Listbox.selectForeground', 'white')
+        self.root.option_add('*TCombobox*Listbox.font', f"{{{FONT_FAM}}} 10")
+        self.root.option_add('*TCombobox*Listbox.relief', 'flat')
+
+        # Modern Checkbox & Radio
+        style.configure("Card.TCheckbutton", background=C_CARD_BG, foreground=C_TEXT_MAIN, font=F_BODY, focuscolor=C_CARD_BG)
+        style.map("Card.TCheckbutton", 
+                  background=[('active', C_CARD_BG)],
+                  indicatorbackground=[('selected', C_ACCENT), ('!selected', C_INPUT_BG)],
+                  indicatorcolor=[('selected', C_ACCENT), ('!selected', C_INPUT_BG)])
+
+        style.configure("Card.TRadiobutton", background=C_CARD_BG, foreground=C_TEXT_MAIN, font=F_BODY, focuscolor=C_CARD_BG)
+        style.map("Card.TRadiobutton", 
+                  background=[('active', C_CARD_BG)],
+                  indicatorbackground=[('selected', C_ACCENT), ('!selected', C_INPUT_BG)],
+                  indicatorcolor=[('selected', C_ACCENT), ('!selected', C_INPUT_BG)])
+
+        # Minimal Scrollbar e Flat Progressbar
+        style.configure("Vertical.TScrollbar", background="#1B1B1B", bordercolor=C_MAIN_BG, arrowcolor=C_MAIN_BG, troughcolor=C_MAIN_BG, arrowsize=5, relief="flat")
+        style.map("Vertical.TScrollbar", background=[('active', "#2E2E2E")])
+        
+        style.configure("Flat.Horizontal.TProgressbar", thickness=6, borderwidth=0, troughcolor=C_MAIN_BG, background=C_ACCENT, troughrelief="flat")
+
+        style.configure("Treeview", background=C_INPUT_BG, foreground=C_TEXT_MAIN, fieldbackground=C_INPUT_BG, borderwidth=0, rowheight=35)
+        style.map('Treeview', background=[('selected', C_ACCENT)])
+        style.configure("Treeview.Heading", background=C_CARD_BG, foreground=C_TEXT_MAIN, font=F_BODY)
 
     def _init_layout(self):
         # --- SIDEBAR ---
@@ -233,6 +273,14 @@ class AlumenGUI:
                         activebackground=C_SIDEBAR_BTN_ACTIVE, activeforeground="white",
                         command=lambda: self._show_frame(page_key))
         btn.pack(fill="x", pady=1)
+        
+        # Hover Effect per i bottoni laterali
+        def on_enter(e):
+            if self.current_page != page_key: btn.configure(bg="#1F1F1F")
+        def on_leave(e):
+            if self.current_page != page_key: btn.configure(bg=C_SIDEBAR_BG)
+        btn.bind("<Enter>", on_enter)
+        btn.bind("<Leave>", on_leave)
         return btn
 
     def _show_frame(self, page_name):
@@ -248,22 +296,32 @@ class AlumenGUI:
         if page_name == "api":
             self._refresh_api_list()
 
-    def _create_card(self, parent, title, icon=""):
+    def _create_card(self, parent, title):
         # Card Wrapper (Shadow effect via border)
         card = tk.Frame(parent, bg=C_CARD_BG, highlightbackground=C_BORDER, highlightthickness=1)
         card.pack(fill="x", pady=(0, 20), padx=5)
         
         # Accent Strip
-        tk.Frame(card, bg=C_ACCENT, height=3).pack(fill="x")
+        tk.Frame(card, bg=C_ACCENT, height=2).pack(fill="x")
         
         # Header
         header = tk.Frame(card, bg=C_CARD_BG, pady=15, padx=20)
         header.pack(fill="x")
-        tk.Label(header, text=f"{icon}  {title}", bg=C_CARD_BG, fg=C_TEXT_MAIN, font=F_H2).pack(side="left")
+        tk.Label(header, text=title, bg=C_CARD_BG, fg=C_TEXT_MAIN, font=F_H2).pack(side="left")
         
         # Content
         content = tk.Frame(card, bg=C_CARD_BG, padx=20)
         content.pack(fill="both", expand=True, pady=(0, 20))
+        
+        # Hover Effect "intelligente" per non sfarfallare passando sui widget figli
+        def on_enter(e): card.config(highlightbackground="#555555")
+        def on_leave(e):
+            x, y = card.winfo_pointerxy()
+            cx, cy, cw, ch = card.winfo_rootx(), card.winfo_rooty(), card.winfo_width(), card.winfo_height()
+            if not (cx <= x <= cx + cw and cy <= y <= cy + ch):
+                card.config(highlightbackground=C_BORDER)
+        card.bind("<Enter>", on_enter)
+        card.bind("<Leave>", on_leave)
         return content
 
     def _make_grid_frame(self, parent, r, c):
@@ -286,7 +344,7 @@ class AlumenGUI:
         self.var_ollama_enabled = tk.BooleanVar(value=False)
 
         # CARD: AI ENGINE
-        c_ai = self._create_card(container, "Motore di Traduzione", "🧠")
+        c_ai = self._create_card(container, "Motore di Traduzione")
         
         f_sel = tk.Frame(c_ai, bg=C_CARD_BG)
         f_sel.pack(fill="x", pady=(0, 15))
@@ -348,7 +406,7 @@ class AlumenGUI:
         ttk.Button(f_om_in, text="🔄", width=4, command=self._refresh_ollama_models).pack(side="right", padx=(10,0))
 
         # CARD: TASK
-        c_task = self._create_card(container, "Parametri Traduzione", "🌍")
+        c_task = self._create_card(container, "Parametri Traduzione")
         
         f_lng = tk.Frame(c_task, bg=C_CARD_BG)
         f_lng.pack(fill="x", pady=(0, 15))
@@ -377,7 +435,7 @@ class AlumenGUI:
         ToolTip(self.ent_gamename, "Nome del progetto per dare contesto all'AI e migliorare la coerenza.")
 
         # CARD: FILES
-        c_file = self._create_card(container, "Gestione File", "📂")
+        c_file = self._create_card(container, "Gestione File")
         
         # Input
         f_in = tk.Frame(c_file, bg=C_CARD_BG)
@@ -424,7 +482,7 @@ class AlumenGUI:
         ToolTip(self.ent_encoding, "Codifica dei file (es. utf-8, cp1252).")
 
         # CARD: TELEGRAM
-        c_tg = self._create_card(container, "Notifiche Telegram", "📢")
+        c_tg = self._create_card(container, "Notifiche Telegram")
         self.var_tg_enabled = tk.BooleanVar(value=False)
         cb_tg = ttk.Checkbutton(c_tg, text="Abilita Notifiche", variable=self.var_tg_enabled, style="Card.TCheckbutton", command=self._toggle_telegram_ui)
         cb_tg.pack(anchor="w", pady=(0, 10))
@@ -462,7 +520,7 @@ class AlumenGUI:
         tk.Label(container, text="Impostazioni Avanzate", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
         
         # CARD: FORMATO
-        c_spec = self._create_card(container, "Specifiche Formato", "⚙️")
+        c_spec = self._create_card(container, "Specifiche Formato")
         
         # CSV
         f_csv = tk.Frame(c_spec, bg=C_CARD_BG)
@@ -531,7 +589,7 @@ class AlumenGUI:
         ToolTip(self.ent_xlsx_tgt, "Lettera della colonna Excel dove scrivere la traduzione.")
 
         # CARD: PROMPT
-        c_ctx = self._create_card(container, "Prompt Engineering", "📝")
+        c_ctx = self._create_card(container, "Prompt Engineering")
         
         ttk.Label(c_ctx, text="Custom Prompt (Istruzioni Extra)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_prompt = PlaceholderEntry(c_ctx, "Es. 'Usa un tono medievale', 'Non tradurre i nomi propri'")
@@ -556,10 +614,12 @@ class AlumenGUI:
         ToolTip(self.cb_full_sample, "Usa tutto il file per generare il contesto (più costoso/lento).")
 
         # CARD: LOGICA
-        c_perf = self._create_card(container, "Logica & Performance", "⚡")
+        c_perf = self._create_card(container, "Logica & Performance")
         
         f_chk = tk.Frame(c_perf, bg=C_CARD_BG)
         f_chk.pack(fill="x", pady=(0, 20))
+        
+        for i in range(3): f_chk.columnconfigure(i, weight=1, uniform="chk")
         
         self.var_cache = tk.BooleanVar(value=True)
         self.var_rotate = tk.BooleanVar(value=True)
@@ -683,7 +743,7 @@ class AlumenGUI:
         tk.Label(container, text="Gestione Chiavi API", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
         
         # CARD: LISTA API
-        c_list = self._create_card(container, "Chiavi Caricate", "🔑")
+        c_list = self._create_card(container, "Chiavi Caricate")
         
         # Treeview
         cols = ("idx", "key", "status", "calls")
@@ -700,6 +760,9 @@ class AlumenGUI:
         
         self.tree_api.pack(fill="x", pady=(0, 10))
         
+        self.tree_api.tag_configure('evenrow', background=C_INPUT_BG)
+        self.tree_api.tag_configure('oddrow', background='#2A2A2E')
+
         # Actions Row
         f_act = tk.Frame(c_list, bg=C_CARD_BG)
         f_act.pack(fill="x")
@@ -724,7 +787,7 @@ class AlumenGUI:
         tk.Label(container, text="Strumenti di Utilità", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
 
         # --- MODIFICA: CARD DRY RUN ---
-        c_dry = self._create_card(container, "Analisi e Preventivo", "📊")
+        c_dry = self._create_card(container, "Analisi e Preventivo")
         ttk.Label(c_dry, text="Esegui una simulazione per calcolare token e costi stimati senza tradurre.", style='Card.TLabel').pack(anchor="w", pady=(0,10))
         
         f_dry_act = tk.Frame(c_dry, bg=C_CARD_BG)
@@ -740,7 +803,7 @@ class AlumenGUI:
         # ------------------------------
 
         # EXTRACTOR
-        c_ex = self._create_card(container, "Estrattore Cache", "📥")
+        c_ex = self._create_card(container, "Estrattore Cache")
         
         f_ex_paths = tk.Frame(c_ex, bg=C_CARD_BG)
         f_ex_paths.pack(fill="x", pady=(0, 15))
@@ -799,7 +862,7 @@ class AlumenGUI:
         self._update_extractor_ui()
 
         # SCANNER
-        c_scan = self._create_card(container, "Auto-Glossary Scanner", "🔍")
+        c_scan = self._create_card(container, "Auto-Glossary Scanner")
         ttk.Label(c_scan, text="Analizza i file per trovare Nomi Propri e Termini Unici.", style='Card.TLabel').pack(anchor="w", pady=(0,10))
         f_scan = tk.Frame(c_scan, bg=C_CARD_BG)
         f_scan.pack(fill="x")
@@ -830,60 +893,92 @@ class AlumenGUI:
         self.btn_save_cache.pack(side="right")
         ToolTip(self.btn_save_cache, "Forza il salvataggio immediato della cache su disco.")
         
-        # Stats
-        f_info = tk.Frame(container, bg=C_CARD_BG, padx=20, pady=20, relief="flat")
+        # Stats Dashboard
+        f_info = tk.Frame(container, bg=C_MAIN_BG)
         f_info.pack(fill="x", pady=(0, 20))
         
-        def make_stat(parent, label, color):
-            f = tk.Frame(parent, bg=C_CARD_BG)
-            f.pack(side="left", expand=True)
-            l_val = tk.Label(f, text="0", bg=C_CARD_BG, font=("Segoe UI", 20, "bold"), fg=color)
-            l_val.pack()
-            tk.Label(f, text=label, bg=C_CARD_BG, font=F_SMALL, fg=C_TEXT_SEC).pack()
+        for i in range(4): f_info.grid_columnconfigure(i, weight=1)
+        
+        def make_stat_card(parent, row, col, label, color, colspan=1):
+            card = tk.Frame(parent, bg=C_CARD_BG, highlightbackground=C_BORDER, highlightthickness=1)
+            card.grid(row=row, column=col, columnspan=colspan, padx=5, pady=5, sticky="nsew")
+            l_val = tk.Label(card, text="0", bg=C_CARD_BG, font=("Segoe UI", 24, "bold"), fg=color)
+            l_val.pack(pady=(15, 0))
+            tk.Label(card, text=label, bg=C_CARD_BG, font=F_SMALL, fg=C_TEXT_SEC).pack(pady=(0, 15))
             return l_val
 
-        self.lbl_stats_files = make_stat(f_info, "FILE COMPLETATI", C_ACCENT)
-        self.lbl_stats_entries = make_stat(f_info, "RIGHE TRADOTTE", C_SUCCESS)
-        self.lbl_stats_cache = make_stat(f_info, "VOCI IN CACHE", C_WARN)
+        self.lbl_stats_files = make_stat_card(f_info, 0, 0, "FILE COMPLETATI", C_ACCENT)
+        self.lbl_stats_entries = make_stat_card(f_info, 0, 1, "RIGHE TRADOTTE", C_SUCCESS)
+        self.lbl_stats_cache = make_stat_card(f_info, 0, 2, "VOCI IN CACHE", C_WARN)
+        self.lbl_stats_api_calls = make_stat_card(f_info, 0, 3, "CHIAMATE API", "#9D88E3")
         
-        self.lbl_stats_tokens_in = make_stat(f_info, "TOKEN INPUT", "#666666")
-        self.lbl_stats_tokens_out = make_stat(f_info, "TOKEN OUTPUT", "#666666")
-        self.lbl_stats_api_calls = make_stat(f_info, "CHIAMATE API", "#666666")
-        self.lbl_stats_time = make_stat(f_info, "TEMPO TOTALE", "#666666")
-        
-        # Progress Bar File Corrente
-        f_prog = tk.Frame(container, bg=C_MAIN_BG, pady=10)
-        f_prog.pack(fill="x")
-        tk.Label(f_prog, text="Progresso File Corrente:", bg=C_MAIN_BG, font=F_SMALL).pack(anchor="w")
-        self.progress_bar = ttk.Progressbar(f_prog, orient="horizontal", length=100, mode="determinate")
-        self.progress_bar.pack(fill="x", pady=(5,0))
-        self.lbl_file_status = tk.Label(f_prog, text="In attesa...", bg=C_MAIN_BG, font=F_SMALL, fg=C_TEXT_SEC)
-        self.lbl_file_status.pack(anchor="e")
+        self.lbl_stats_tokens_in = make_stat_card(f_info, 1, 0, "TOKEN INPUT", "#4EABA6")
+        self.lbl_stats_tokens_out = make_stat_card(f_info, 1, 1, "TOKEN OUTPUT", "#4EABA6")
+        self.lbl_stats_time = make_stat_card(f_info, 1, 2, "TEMPO TOTALE", "#E0E0E0", colspan=2)
 
-        # Terminal
-        frame_log = tk.Frame(container, bg="#1E1E1E", bd=0)
-        frame_log.pack(fill="both", expand=True)
-        self.txt_log = scrolledtext.ScrolledText(frame_log, state='disabled', font=F_MONO, 
-                                                 bg="#1E1E1E", fg="#D4D4D4", relief="flat", padx=15, pady=15, insertbackground="white")
+        # Terminal & Progress Wrapper
+        c_term = tk.Frame(container, bg=C_CARD_BG, highlightbackground=C_BORDER, highlightthickness=1)
+        c_term.pack(fill="both", expand=True, pady=(0, 10))
+
+        # Terminal Header (macOS style)
+        f_term_head = tk.Frame(c_term, bg="#2D2D30", height=28)
+        f_term_head.pack(fill="x")
+        f_term_head.pack_propagate(False)
+
+        f_dots = tk.Frame(f_term_head, bg="#2D2D30")
+        f_dots.pack(side="left", padx=10)
+        tk.Label(f_dots, text="⬤", fg="#FF5F56", bg="#2D2D30", font=("Arial", 10)).pack(side="left", padx=2)
+        tk.Label(f_dots, text="⬤", fg="#FFBD2E", bg="#2D2D30", font=("Arial", 10)).pack(side="left", padx=2)
+        tk.Label(f_dots, text="⬤", fg="#27C93F", bg="#2D2D30", font=("Arial", 10)).pack(side="left", padx=2)
+
+        tk.Label(f_term_head, text="Alumen Console Output", bg="#2D2D30", fg=C_TEXT_SEC, font=F_SMALL).pack(side="left", padx=10)
+
+        # Progress Bar under header
+        f_prog = tk.Frame(c_term, bg=C_CARD_BG, pady=8, padx=15)
+        f_prog.pack(fill="x")
+        f_prog.columnconfigure(1, weight=1)
+        
+        tk.Label(f_prog, text="Progresso:", bg=C_CARD_BG, font=F_SMALL, fg=C_TEXT_MAIN).grid(row=0, column=0, sticky="w", padx=(0,10))
+        self.progress_bar = ttk.Progressbar(f_prog, orient="horizontal", mode="determinate", style="Flat.Horizontal.TProgressbar")
+        self.progress_bar.grid(row=0, column=1, sticky="ew")
+        self.lbl_file_status = tk.Label(f_prog, text="In attesa...", bg=C_CARD_BG, font=F_SMALL, fg=C_TEXT_SEC)
+        self.lbl_file_status.grid(row=0, column=2, sticky="e", padx=(10,0))
+
+        # Terminal Text Area
+        self.txt_log = scrolledtext.ScrolledText(c_term, state='disabled', font=F_MONO, 
+                                                 bg="#0D0D0D", fg="#D4D4D4", relief="flat", padx=15, pady=15, insertbackground="white")
         self.txt_log.pack(fill="both", expand=True)
         
-        # Actions
-        f_act = tk.Frame(container, bg=C_MAIN_BG, pady=20)
+        # Syntax highlighting tags
+        self.txt_log.tag_config("error", foreground="#FF5F56")
+        self.txt_log.tag_config("success", foreground="#27C93F")
+        self.txt_log.tag_config("warn", foreground="#FFBD2E")
+        self.txt_log.tag_config("info", foreground="#58A6FF")
+        self.txt_log.tag_config("dim", foreground="#666666")
+        
+        # Action Control Bar
+        f_act_wrap = tk.Frame(container, bg=C_MAIN_BG, pady=15)
+        f_act_wrap.pack(fill="x")
+
+        f_act = tk.Frame(f_act_wrap, bg=C_MAIN_BG)
         f_act.pack(fill="x")
+        
+        for i in range(4): f_act.columnconfigure(i, weight=1, uniform="btn")
+
         self.btn_run = ttk.Button(f_act, text="▶  AVVIA PROCESSO", style='Action.TButton', command=self._start_process)
-        self.btn_run.pack(side="left", fill="x", expand=True, padx=5)
+        self.btn_run.grid(row=0, column=0, sticky="ew", padx=(0, 5))
         ToolTip(self.btn_run, "Avvia la traduzione con le impostazioni correnti.")
         
         self.btn_pause = ttk.Button(f_act, text="⏸  PAUSA", style='Warn.TButton', command=self._toggle_pause, state='disabled')
-        self.btn_pause.pack(side="left", fill="x", expand=True, padx=5)
+        self.btn_pause.grid(row=0, column=1, sticky="ew", padx=5)
         ToolTip(self.btn_pause, "Mette in pausa il processo (completa il batch corrente).")
         
-        self.btn_skip = ttk.Button(f_act, text="⏭  SALTA FILE", command=self._skip_file, state='disabled')
-        self.btn_skip.pack(side="left", fill="x", expand=True, padx=5)
+        self.btn_skip = ttk.Button(f_act, text="⏭  SALTA FILE", style='Secondary.TButton', command=self._skip_file, state='disabled')
+        self.btn_skip.grid(row=0, column=2, sticky="ew", padx=5)
         ToolTip(self.btn_skip, "Interrompe il file corrente e passa al successivo.")
         
         self.btn_stop = ttk.Button(f_act, text="⏹  STOP", style='Danger.TButton', command=self._stop_process)
-        self.btn_stop.pack(side="right", fill="x", expand=True, padx=5)
+        self.btn_stop.grid(row=0, column=3, sticky="ew", padx=(5, 0))
         ToolTip(self.btn_stop, "Interrompe completamente il processo.")
 
     # --- LOGIC ---
@@ -1037,7 +1132,18 @@ class AlumenGUI:
         while not self.log_queue.empty():
             msg = self.log_queue.get_nowait()
             self.txt_log.configure(state='normal')
-            self.txt_log.insert(tk.END, msg + "\n")
+            
+            tag = None
+            msg_l = msg.lower()
+            if "errore" in msg_l or "🛑" in msg: tag = "error"
+            elif "✅" in msg or "completato" in msg_l: tag = "success"
+            elif "⚠️" in msg or "attenzione" in msg_l or "skip" in msg_l: tag = "warn"
+            elif "ℹ️" in msg or "➡️" in msg: tag = "info"
+            elif "---" in msg: tag = "dim"
+            
+            if tag: self.txt_log.insert(tk.END, msg + "\n", tag)
+            else: self.txt_log.insert(tk.END, msg + "\n")
+            
             self.txt_log.see(tk.END)
             self.txt_log.configure(state='disabled')
         self.root.after(100, self._poll_log_queue)
@@ -1098,6 +1204,15 @@ class AlumenGUI:
 
         if self.is_running: self.status_var.set(f"In esecuzione... {files} file completati")
         self.root.after(1000, self._update_stats)
+
+    def _update_spinner(self):
+        if self.is_running:
+            self.spinner_idx = (self.spinner_idx + 1) % len(self.spinner_chars)
+            spin = self.spinner_chars[self.spinner_idx]
+            files = AlumenCore.total_files_translated
+            self.status_var.set(f"{spin} In esecuzione... {files} file completati")
+        self.root.after(100, self._update_spinner)
+
     def _force_save_cache(self):
         if self.current_args and self.var_cache.get():
             AlumenCore.check_and_save_cache(self.current_args, force=True)
@@ -1145,9 +1260,9 @@ class AlumenGUI:
         top = tk.Toplevel(self.root)
         top.title("Ultimo Prompt Inviato")
         top.geometry("700x500")
-        top.configure(bg="#1e272e")
+        top.configure(bg=C_MAIN_BG)
         
-        st = scrolledtext.ScrolledText(top, bg="#1e272e", fg="#2ecc71", font=("Consolas", 10), padx=15, pady=15)
+        st = scrolledtext.ScrolledText(top, bg="#0D0D0D", fg="#2ecc71", font=F_MONO, padx=15, pady=15)
         st.pack(fill="both", expand=True)
         st.insert(tk.END, prompt)
         st.configure(state='disabled')
@@ -1182,7 +1297,8 @@ class AlumenGUI:
             
             calls = counts.get(i, 0)
 
-            item_id = self.tree_api.insert('', 'end', values=(i, short_k, status, calls))
+            tags = ('evenrow',) if i % 2 == 0 else ('oddrow',)
+            item_id = self.tree_api.insert('', 'end', values=(i, short_k, status, calls), tags=tags)
             
             # Ripristina selezione
             if selected_idx is not None and i == selected_idx:
@@ -1396,8 +1512,8 @@ class AlumenGUI:
         top = tk.Toplevel(self.root)
         top.title("Prompt Preview")
         top.geometry("800x650")
-        top.configure(bg="#1e272e")
-        st = scrolledtext.ScrolledText(top, bg="#1e272e", fg="#2ecc71", font=("Consolas", 11), padx=15, pady=15)
+        top.configure(bg=C_MAIN_BG)
+        st = scrolledtext.ScrolledText(top, bg="#0D0D0D", fg="#2ecc71", font=F_MONO, padx=15, pady=15)
         st.pack(fill="both", expand=True)
         st.insert(tk.END, preview_text)
         st.configure(state='disabled')
