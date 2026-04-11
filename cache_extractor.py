@@ -191,7 +191,7 @@ def process_files(args, cache):
             elif args.file_type == 'xlsx': extract_from_xlsx(s_path, t_path, cache, args)
 
 def main():
-    parser = argparse.ArgumentParser(description="Alumen Cache Extractor v2.5", formatter_class=ColorHelpFormatter)
+    parser = argparse.ArgumentParser(description="Alumen Cache Extractor v2.6.2", formatter_class=ColorHelpFormatter)
     
     g = parser.add_argument_group('Configurazione')
     g.add_argument("--source-dir", required=True, help="Cartella file ORIGINALI")

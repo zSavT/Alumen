@@ -114,10 +114,238 @@ class ScrollableFrame(ttk.Frame):
 class AlumenGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Alumen v2.6.1 - AI Translation Suite")
+        self.root.title("Alumen v2.6.2 - AI Translation Suite")
         self.root.geometry("1280x950")
         self.root.configure(bg=C_MAIN_BG)
         
+        # --- Sistema i18n (Multi-Lingua) ---
+        self.current_lang = "it"
+        self.translations = {
+            "it": {}, # L'Italiano è la lingua base hardcoded
+            "en": {
+                "⚙️  Configurazione": "⚙️  Configuration",
+                "🧠  Avanzate": "🧠  Advanced",
+                "🔑  Gestione API": "🔑  API Management",
+                "🛠️  Strumenti": "🛠️  Tools",
+                "🚀  Esecuzione": "🚀  Execution",
+                "Configurazione Progetto": "Project Configuration",
+                "Motore di Traduzione": "Translation Engine",
+                "Google Gemini (Cloud)": "Google Gemini (Cloud)",
+                "Ollama (Locale)": "Ollama (Local)",
+                "API Key": "API Key",
+                "📂 Load .txt": "📂 Load .txt",
+                "Modello": "Model",
+                "Host URL": "Host URL",
+                "Modello Locale": "Local Model",
+                "Parametri Traduzione": "Translation Parameters",
+                "Lingua Sorgente": "Source Language",
+                "Lingua Target": "Target Language",
+                "Contesto Gioco / Progetto": "Game / Project Context",
+                "Gestione File": "File Management",
+                "Cartella Input": "Input Folder",
+                "Cartella Output": "Output Folder",
+                "Sfoglia": "Browse",
+                "Formato File": "File Format",
+                "Encoding": "Encoding",
+                "Notifiche Telegram": "Telegram Notifications",
+                "Abilita Notifiche": "Enable Notifications",
+                "Bot Token": "Bot Token",
+                "Chat ID": "Chat ID",
+                "Impostazioni Avanzate": "Advanced Settings",
+                "Specifiche Formato": "Format Specifications",
+                "Delimitatore CSV": "CSV Delimiter",
+                "Indice Col. Origine (0=A)": "Source Col Index (0=A)",
+                "Indice Col. Destinazione": "Target Col Index",
+                "Limite Max Colonne": "Max Columns Limit",
+                "Chiavi JSON da Tradurre": "JSON Keys to Translate",
+                "Corrispondenza Percorso Esatto": "Exact Path Match",
+                "Lettera Col. Origine (es. A,C)": "Source Col Letter (e.g. A,C)",
+                "Lettera Col. Destinaz. (es. B,D)": "Target Col Letter (e.g. B,D)",
+                "Prompt Engineering": "Prompt Engineering",
+                "Custom Prompt (SOVRASCRIVE regole base)": "Custom Prompt (OVERWRITES base rules)",
+                "Contesto Fisso (Aggiunta rapida)": "Fixed Context (Quick Add)",
+                "Analisi Preliminare File (Auto-Context)": "File Preliminary Analysis (Auto-Context)",
+                "Full Sample (Più lento)": "Full Sample (Slower)",
+                "Logica & Performance": "Logic & Performance",
+                "Salva Cache": "Save Cache",
+                "Auto-Rotazione API": "Auto-Rotate API",
+                "Solo Output .txt": "Text Output Only",
+                "Server Mode": "Server Mode",
+                "Resume (Salta fatti)": "Resume (Skip done)",
+                "File Log (log.txt)": "File Log (log.txt)",
+                "Agentic Reflection": "Agentic Reflection",
+                "Fuzzy Match Cache": "Fuzzy Match Cache",
+                "Spegnimento Auto": "Auto Shutdown",
+                "Upload a Gemini": "Upload to Gemini",
+                "Glossario CSV": "CSV Glossary",
+                "Style Guide (.txt - Manuale Regole)": "Style Guide (.txt - Rulebook)",
+                "File Cache JSON": "JSON Cache File",
+                "Gestione Chiavi API": "API Key Management",
+                "Chiavi Caricate": "Loaded Keys",
+                "Stato": "Status",
+                "Chiamate": "Calls",
+                "➕ Aggiungi": "➕ Add",
+                "🗑️ Rimuovi Selez.": "🗑️ Remove Sel.",
+                "🚫 Blacklist": "🚫 Blacklist",
+                "✅ Reset Tutte": "✅ Reset All",
+                "🔄 Aggiorna Lista": "🔄 Refresh List",
+                "Strumenti di Utilità": "Utility Tools",
+                "Analisi e Preventivo": "Analysis and Estimate",
+                "Abilita Modalità Dry Run": "Enable Dry Run Mode",
+                "Avvia Analisi Dry Run": "Start Dry Run Analysis",
+                "Estrattore Cache": "Cache Extractor",
+                "Cartella Originali": "Original Folder",
+                "Cartella Tradotti": "Translated Folder",
+                "Formato:": "Format:",
+                "Esegui Estrazione": "Run Extraction",
+                "Auto-Glossary Scanner": "Auto-Glossary Scanner",
+                "Formato File:": "File Format:",
+                "Avvia Scansione": "Start Scan",
+                "Console di Esecuzione": "Execution Console",
+                "👁️ Vedi Prompt": "👁️ View Prompt",
+                "💾 Salva Cache": "💾 Save Cache",
+                "FILE COMPLETATI": "FILES COMPLETED",
+                "RIGHE TRADOTTE": "LINES TRANSLATED",
+                "VOCI IN CACHE": "CACHE ENTRIES",
+                "CHIAMATE API": "API CALLS",
+                "TOKEN INPUT": "INPUT TOKENS",
+                "TOKEN OUTPUT": "OUTPUT TOKENS",
+                "TEMPO TOTALE": "TOTAL TIME",
+                "Progresso:": "Progress:",
+                "In attesa...": "Waiting...",
+                "▶  AVVIA PROCESSO": "▶  START PROCESS",
+                "⏸  PAUSA": "⏸  PAUSE",
+                "⏭  SALTA FILE": "⏭  SKIP FILE",
+                "⏹  STOP": "⏹  STOP",
+                "Pronto": "Ready",
+                "Batch Size": "Batch Size",
+                "RPM Limit": "RPM Limit",
+                "Max Entries": "Max Entries",
+                "Ctx Window": "Ctx Window",
+                "Wrap At": "Wrap At",
+                "Newline Char": "Newline Char",
+                "Esegui una simulazione per calcolare token e costi stimati senza tradurre.": "Run a simulation to calculate estimated tokens and costs without translating.",
+                "Analizza i file per trovare Nomi Propri e Termini Unici.": "Analyze files to find Proper Nouns and Unique Terms.",
+                "Col. Orig:": "Source Col:",
+                "Col. Trad:": "Target Col:",
+                "Keys:": "Keys:",
+                "Alumen Console Output": "Alumen Console Output",
+                "▶ RIPRENDI": "▶ RESUME",
+                "⏸ PAUSA": "⏸ PAUSE",
+                "Processo in PAUSA": "Process PAUSED",
+                "Processo RIPRESO": "Process RESUMED",
+                "Salto file corrente...": "Skipping current file...",
+                "Processo INTERROTTO": "Process STOPPED",
+                "Recupero modelli...": "Fetching models...",
+                "Modelli aggiornati": "Models updated",
+                "Errore recupero modelli": "Error fetching models",
+                "Connessione a Ollama...": "Connecting to Ollama...",
+                "Modelli Ollama caricati": "Ollama models loaded",
+                "Nessun modello Ollama trovato": "No Ollama models found",
+                "Estrazione cache in corso...": "Cache extraction in progress...",
+                "Scansione termini in corso...": "Term scanning in progress...",
+                "Scansione completata": "Scan completed",
+                "Avvio traduzione...": "Starting translation...",
+                "Cache salvata su disco": "Cache saved to disk",
+                "In esecuzione...": "Running...",
+                " file completati": " files completed",
+                "Stima fine file: ": "Est. end: ",
+                "Errore": "Error",
+                "Attenzione": "Warning",
+                "Info": "Info",
+                "Fatto": "Done",
+                "Salvataggio OK": "Save OK",
+                "Inserisci Token e Chat ID": "Enter Token and Chat ID",
+                "Seleziona cartelle!": "Select folders!",
+                "API Key necessaria": "API Key required",
+                "Manca API Key!": "Missing API Key!",
+                "Seleziona un modello Ollama!": "Select an Ollama model!",
+                "JSON richiede chiavi!": "JSON requires keys!",
+                "Processo Avviato": "Process Started",
+                "La traduzione è iniziata. Puoi monitorare l'avanzamento nella scheda 'Esecuzione'.": "Translation started. You can monitor progress in the 'Execution' tab.",
+                "Processo Terminato": "Process Finished",
+                "Il lavoro è stato completato.": "The job has been completed.",
+                "Nessun prompt inviato finora.": "No prompt sent yet.",
+                "Ultimo Prompt Inviato": "Last Prompt Sent",
+                "Prompt Preview": "Prompt Preview",
+                "In Attesa": "Waiting",
+                "🟢 ATTIVA": "🟢 ACTIVE",
+                "🔴 BLACKLIST": "🔴 BLACKLIST",
+                "API Key aggiunta.": "API Key added.",
+                "Blacklist resettata.": "Blacklist reset.",
+                "Aggiornamento": "Update",
+                "Aggiornamento disponibile: v": "Update available: v",
+                " disponibile su GitHub!": " available on GitHub!",
+                "Inserisci qui la tua API Key di Google Gemini.": "Enter your Google Gemini API Key here.",
+                "Seleziona il modello AI da utilizzare.": "Select the AI model to use.",
+                "Indirizzo del server Ollama (default: http://localhost:11434).": "Ollama server address (default: http://localhost:11434).",
+                "Seleziona il modello Ollama installato.": "Select the installed Ollama model.",
+                "Lingua originale del testo (es. inglese, giapponese).": "Original text language (e.g., english, japanese).",
+                "Lingua in cui tradurre il testo.": "Language to translate the text into.",
+                "Nome del progetto per dare contesto all'AI e migliorare la coerenza.": "Project name to give context to the AI and improve consistency.",
+                "Cartella contenente i file da tradurre.": "Folder containing the files to translate.",
+                "Cartella dove verranno salvati i file tradotti.": "Folder where translated files will be saved.",
+                "Seleziona il formato dei file da elaborare.": "Select the format of the files to process.",
+                "Codifica dei file (es. utf-8, cp1252).": "File encoding (e.g., utf-8, cp1252).",
+                "Abilita l'invio di log e stato via Telegram.": "Enable sending logs and status via Telegram.",
+                "Token del bot Telegram (da BotFather).": "Telegram bot token (from BotFather).",
+                "ID della chat o del canale dove ricevere le notifiche.": "ID of the chat or channel to receive notifications.",
+                "Carattere che separa le colonne nel file CSV (es. virgola ',' o punto e virgola ';').": "Character that separates columns in the CSV file (e.g., comma ',' or semicolon ';').",
+                "Indice numerico della colonna da tradurre. La prima colonna è 0.": "Numeric index of the column to translate. The first column is 0.",
+                "Indice numerico della colonna in cui salvare la traduzione. Se uguale all'origine, sovrascriverà i testi originali.": "Numeric index of the column to save the translation. If equal to source, it will overwrite the original texts.",
+                "Ignora le righe che hanno più di N colonne. Utile per saltare righe di commento mal formattate.": "Ignore rows with more than N columns. Useful for skipping poorly formatted comment rows.",
+                "Elenco delle chiavi JSON che contengono testo da tradurre (separate da virgola). Obbligatorio per elaborare i JSON.": "List of JSON keys containing text to translate (comma-separated). Required to process JSONs.",
+                "Se attivo, controlla l'intera gerarchia della chiave (es. 'dialogue.npc.text' invece di considerare qualsiasi chiave 'text').": "If active, checks the entire key hierarchy (e.g., 'dialogue.npc.text' instead of considering any 'text' key).",
+                "Lettera della colonna originale. Usa la virgola per indicarne multiple (es. A,C,E).": "Source column letter. Use comma for multiple (e.g., A,C,E).",
+                "Lettera di destinazione. Usa la virgola (es. B,D,F) per abbinarle alle origini.": "Target column letter. Use comma to match sources (e.g., B,D,F).",
+                "⚠️ Sostituisce in blocco il prompt di base di Alumen. Usa solo per esperimenti estremi. Richiede {text_to_translate}.": "⚠️ Completely replaces Alumen's base prompt. Use only for extreme experiments. Requires {text_to_translate}.",
+                "Aggiunge una singola frase informativa alla fine delle regole standard per chiarire la trama.": "Adds a single informative sentence at the end of standard rules to clarify the plot.",
+                "Legge le prime righe del file per generare un contesto automatico.": "Reads the first lines of the file to generate an automatic context.",
+                "Usa tutto il file per generare il contesto (più costoso/lento).": "Uses the whole file to generate context (more expensive/slower).",
+                "Salva le traduzioni per non ripeterle.": "Saves translations to avoid repeating them.",
+                "Passa alla chiave successiva se una finisce la quota.": "Switches to the next key if one runs out of quota.",
+                "Genera solo un file di testo con le traduzioni.": "Generates only a text file with translations.",
+                "Riprova all'infinito in caso di errore (no blacklist).": "Retries infinitely in case of error (no blacklist).",
+                "Salta le righe già tradotte nel file di output.": "Skips already translated rows in the output file.",
+                "Salva il log su file.": "Saves the log to a file.",
+                "L'AI ricontrolla la propria traduzione (2x costo).": "AI double-checks its own translation (2x cost).",
+                "Usa la cache anche per frasi simili (maiuscole/punteggiatura).": "Uses cache even for similar phrases (caps/punctuation).",
+                "Spegne il PC al termine del lavoro.": "Shuts down the PC when the job is done.",
+                "Carica l'intero file su Gemini invece di tradurre riga per riga.": "Uploads the entire file to Gemini instead of translating line by line.",
+                "Righe per richiesta.": "Rows per request.",
+                "Richieste per minuto massime.": "Maximum requests per minute.",
+                "Limite righe per file.": "Row limit per file.",
+                "Righe precedenti da inviare come contesto.": "Previous rows to send as context.",
+                "A capo automatico dopo N caratteri.": "Word wrap after N characters.",
+                "Carattere per l'a capo (es. \\n).": "Newline character (e.g., \\n).",
+                "File CSV con termini forzati (Originale,Traduzione).": "CSV file with forced terms (Original,Translation).",
+                "Allega un file di testo con regole dettagliate di formattazione e tono di voce (es. dare del Voi, stile UI).": "Attach a text file with detailed formatting and tone of voice rules.",
+                "File JSON dove salvare/caricare le traduzioni.": "JSON file where to save/load translations.",
+                "Lancia il processo in modalità simulazione.": "Starts the process in simulation mode.",
+                "Crea un file cache JSON confrontando i file originali e tradotti.": "Creates a JSON cache file comparing original and translated files.",
+                "Usa l'AI per estrarre una lista di termini univoci dai file di input.": "Uses AI to extract a list of unique terms from input files.",
+                "Visualizza l'ultimo prompt inviato all'AI.": "Displays the last prompt sent to AI.",
+                "Forza il salvataggio immediato della cache su disco.": "Forces immediate saving of cache to disk.",
+                "Avvia la traduzione con le impostazioni correnti.": "Starts translation with current settings.",
+                "Mette in pausa il processo (completa il batch corrente).": "Pauses the process (completes the current batch).",
+                "Interrompe il file corrente e passa al successivo.": "Stops the current file and moves to the next.",
+                "Interrompe completamente il processo.": "Completely stops the process."
+            }
+        }
+        
+        # Caricamento lingue addizionali da json (se esiste)
+        if os.path.exists("locales.json"):
+            try:
+                with open("locales.json", "r", encoding="utf-8") as f:
+                    ext_langs = json.load(f)
+                    for lang, trans_dict in ext_langs.items():
+                        if lang in self.translations:
+                            self.translations[lang].update(trans_dict)
+                        else:
+                            self.translations[lang] = trans_dict
+            except Exception: pass
+        # -------------------------------
+
         self.log_queue = queue.Queue()
         self.stop_event = threading.Event()
         self.pause_event = threading.Event(); self.pause_event.set()
@@ -145,6 +373,10 @@ class AlumenGUI:
         self.root.after(100, self._update_spinner)
         self.root.after(2000, self._check_update_thread)
         self.root.after(100, self._update_ui_states)
+
+    def tr(self, text):
+        if self.current_lang == "it": return text
+        return self.translations.get(self.current_lang, {}).get(text, text)
 
     def _configure_styles(self):
         style = ttk.Style()
@@ -232,15 +464,24 @@ class AlumenGUI:
         f_nav = tk.Frame(self.sidebar, bg=C_SIDEBAR_BG)
         f_nav.pack(fill="x", padx=0, pady=20)
         
-        self.nav_buttons['conf'] = self._make_nav_btn(f_nav, "⚙️  Configurazione", "conf")
-        self.nav_buttons['adv'] = self._make_nav_btn(f_nav, "🧠  Avanzate", "adv")
-        self.nav_buttons['api'] = self._make_nav_btn(f_nav, "🔑  Gestione API", "api") # Nuova scheda
-        self.nav_buttons['tools'] = self._make_nav_btn(f_nav, "🛠️  Strumenti", "tools")
-        self.nav_buttons['log'] = self._make_nav_btn(f_nav, "🚀  Esecuzione", "log")
+        self.nav_buttons['conf'] = self._make_nav_btn(f_nav, self.tr("⚙️  Configurazione"), "conf")
+        self.nav_buttons['adv'] = self._make_nav_btn(f_nav, self.tr("🧠  Avanzate"), "adv")
+        self.nav_buttons['api'] = self._make_nav_btn(f_nav, self.tr("🔑  Gestione API"), "api")
+        self.nav_buttons['tools'] = self._make_nav_btn(f_nav, self.tr("🛠️  Strumenti"), "tools")
+        self.nav_buttons['log'] = self._make_nav_btn(f_nav, self.tr("🚀  Esecuzione"), "log")
         
         # Footer
         tk.Label(self.sidebar, text=f"Core v{AlumenCore.CURRENT_SCRIPT_VERSION}", bg=C_SIDEBAR_BG, fg="#666666", font=F_SMALL).pack(side="bottom", pady=15)
         
+        # Selettore Lingua / Language Selector
+        f_lang = tk.Frame(self.sidebar, bg=C_SIDEBAR_BG)
+        f_lang.pack(side="bottom", pady=(0, 10))
+        tk.Label(f_lang, text="🌐", bg=C_SIDEBAR_BG, fg=C_TEXT_SIDEBAR).pack(side="left")
+        self.cmb_lang = ttk.Combobox(f_lang, values=list(self.translations.keys()), width=5, state="readonly")
+        self.cmb_lang.set(self.current_lang)
+        self.cmb_lang.pack(side="left", padx=5)
+        self.cmb_lang.bind("<<ComboboxSelected>>", self._change_language)
+
         # --- MAIN CONTENT ---
         self.main_area = tk.Frame(self.root, bg=C_MAIN_BG)
         self.main_area.pack(side="right", fill="both", expand=True)
@@ -260,12 +501,19 @@ class AlumenGUI:
         self._build_page_log(self.frames["log"])
         
         # Status Bar
-        self.status_var = tk.StringVar(value="Pronto")
+        self.status_var = tk.StringVar(value=self.tr("Pronto"))
         self.status_bar = tk.Frame(self.main_area, bg=C_ACCENT, height=30)
         self.status_bar.place(relx=0, rely=1, anchor="sw", relwidth=1)
         tk.Label(self.status_bar, textvariable=self.status_var, bg=C_ACCENT, fg="white", font=F_SMALL, padx=10).pack(side="left")
         
         self._show_frame("conf")
+
+    def _change_language(self, event=None):
+        new_lang = self.cmb_lang.get()
+        if new_lang != self.current_lang:
+            self.current_lang = new_lang
+            for widget in self.root.winfo_children(): widget.destroy()
+            self._init_layout()
 
     def _make_nav_btn(self, parent, text, page_key):
         btn = tk.Button(parent, text=text, bg=C_SIDEBAR_BG, fg=C_TEXT_SIDEBAR, font=F_SIDEBAR, 
@@ -337,19 +585,19 @@ class AlumenGUI:
         container = ttk.Frame(sf.scrollable_frame, padding=40)
         container.pack(fill="both", expand=True)
         
-        tk.Label(container, text="Configurazione Progetto", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
+        tk.Label(container, text=self.tr("Configurazione Progetto"), bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
         
         # Init vars
         self.var_ai_provider = tk.StringVar(value="gemini")
         self.var_ollama_enabled = tk.BooleanVar(value=False)
 
         # CARD: AI ENGINE
-        c_ai = self._create_card(container, "Motore di Traduzione")
+        c_ai = self._create_card(container, self.tr("Motore di Traduzione"))
         
         f_sel = tk.Frame(c_ai, bg=C_CARD_BG)
         f_sel.pack(fill="x", pady=(0, 15))
-        ttk.Radiobutton(f_sel, text="Google Gemini (Cloud)", variable=self.var_ai_provider, value="gemini", style="Card.TRadiobutton", command=self._toggle_ai_provider).pack(side="left", padx=(0, 20))
-        ttk.Radiobutton(f_sel, text="Ollama (Locale)", variable=self.var_ai_provider, value="ollama", style="Card.TRadiobutton", command=self._toggle_ai_provider).pack(side="left", padx=10)
+        ttk.Radiobutton(f_sel, text=self.tr("Google Gemini (Cloud)"), variable=self.var_ai_provider, value="gemini", style="Card.TRadiobutton", command=self._toggle_ai_provider).pack(side="left", padx=(0, 20))
+        ttk.Radiobutton(f_sel, text=self.tr("Ollama (Locale)"), variable=self.var_ai_provider, value="ollama", style="Card.TRadiobutton", command=self._toggle_ai_provider).pack(side="left", padx=10)
 
         # Gemini Panel
         self.f_gemini = tk.Frame(c_ai, bg=C_CARD_BG)
@@ -357,31 +605,31 @@ class AlumenGUI:
         
         f_k = tk.Frame(self.f_gemini, bg=C_CARD_BG)
         f_k.pack(fill="x", pady=(0, 10))
-        ttk.Label(f_k, text="API Key", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_k, text=self.tr("API Key"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         
         f_k_in = tk.Frame(f_k, bg=C_CARD_BG)
         f_k_in.pack(fill="x", pady=(5,0))
         self.ent_api = ttk.Entry(f_k_in)
         self.ent_api.pack(side="left", fill="x", expand=True)
-        ToolTip(self.ent_api, "Inserisci qui la tua API Key di Google Gemini.")
+        ToolTip(self.ent_api, self.tr("Inserisci qui la tua API Key di Google Gemini."))
         
         self.f_file_loaded = tk.Frame(f_k_in, bg=C_CARD_BG)
         self.lbl_file_loaded = ttk.Label(self.f_file_loaded, text="", foreground=C_SUCCESS, font=("Segoe UI", 9, "bold"), style='Card.TLabel')
         self.lbl_file_loaded.pack(side="left", padx=10)
         ttk.Button(self.f_file_loaded, text="✕", width=3, command=self._clear_api_file).pack(side="left")
         
-        ttk.Button(f_k_in, text="📂 Load .txt", command=self._load_api_file).pack(side="right", padx=(10,0))
+        ttk.Button(f_k_in, text=self.tr("📂 Load .txt"), command=self._load_api_file).pack(side="right", padx=(10,0))
         
         f_m = tk.Frame(self.f_gemini, bg=C_CARD_BG)
         f_m.pack(fill="x")
-        ttk.Label(f_m, text="Modello", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_m, text=self.tr("Modello"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         f_m_in = tk.Frame(f_m, bg=C_CARD_BG)
         f_m_in.pack(fill="x", pady=(5,0))
         self.cmb_model = ttk.Combobox(f_m_in, state="readonly")
         self.cmb_model['values'] = ("gemini-2.0-flash [Default]",)
         self.cmb_model.current(0)
         self.cmb_model.pack(side="left", fill="x", expand=True)
-        ToolTip(self.cmb_model, "Seleziona il modello AI da utilizzare.")
+        ToolTip(self.cmb_model, self.tr("Seleziona il modello AI da utilizzare."))
         ttk.Button(f_m_in, text="🔄", width=4, command=self._refresh_models_auto).pack(side="right", padx=(10,0))
 
         # Ollama Panel
@@ -389,77 +637,77 @@ class AlumenGUI:
         
         f_oh = tk.Frame(self.f_ollama, bg=C_CARD_BG)
         f_oh.pack(fill="x", pady=(0, 10))
-        ttk.Label(f_oh, text="Host URL", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_oh, text=self.tr("Host URL"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_ollama_host = ttk.Entry(f_oh)
         self.ent_ollama_host.insert(0, AlumenCore.DEFAULT_OLLAMA_HOST)
         self.ent_ollama_host.pack(fill="x", pady=(5,0))
-        ToolTip(self.ent_ollama_host, "Indirizzo del server Ollama (default: http://localhost:11434).")
+        ToolTip(self.ent_ollama_host, self.tr("Indirizzo del server Ollama (default: http://localhost:11434)."))
         
         f_om = tk.Frame(self.f_ollama, bg=C_CARD_BG)
         f_om.pack(fill="x")
-        ttk.Label(f_om, text="Modello Locale", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_om, text=self.tr("Modello Locale"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         f_om_in = tk.Frame(f_om, bg=C_CARD_BG)
         f_om_in.pack(fill="x", pady=(5,0))
         self.cmb_ollama_model = ttk.Combobox(f_om_in, state="readonly")
         self.cmb_ollama_model.pack(side="left", fill="x", expand=True)
-        ToolTip(self.cmb_ollama_model, "Seleziona il modello Ollama installato.")
+        ToolTip(self.cmb_ollama_model, self.tr("Seleziona il modello Ollama installato."))
         ttk.Button(f_om_in, text="🔄", width=4, command=self._refresh_ollama_models).pack(side="right", padx=(10,0))
 
         # CARD: TASK
-        c_task = self._create_card(container, "Parametri Traduzione")
+        c_task = self._create_card(container, self.tr("Parametri Traduzione"))
         
         f_lng = tk.Frame(c_task, bg=C_CARD_BG)
         f_lng.pack(fill="x", pady=(0, 15))
         
         f_l1 = tk.Frame(f_lng, bg=C_CARD_BG)
         f_l1.pack(side="left", fill="x", expand=True)
-        ttk.Label(f_l1, text="Lingua Sorgente", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_l1, text=self.tr("Lingua Sorgente"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_src = ttk.Entry(f_l1)
         self.ent_src.insert(0, "inglese")
         self.ent_src.pack(fill="x", pady=(5,0))
-        ToolTip(self.ent_src, "Lingua originale del testo (es. inglese, giapponese).")
+        ToolTip(self.ent_src, self.tr("Lingua originale del testo (es. inglese, giapponese)."))
         
         tk.Label(f_lng, text="➜", bg=C_CARD_BG, fg=C_ACCENT, font=("Segoe UI", 14)).pack(side="left", padx=20, pady=(15,0))
         
         f_l2 = tk.Frame(f_lng, bg=C_CARD_BG)
         f_l2.pack(side="left", fill="x", expand=True)
-        ttk.Label(f_l2, text="Lingua Target", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_l2, text=self.tr("Lingua Target"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_tgt = ttk.Entry(f_l2)
         self.ent_tgt.insert(0, "italiano")
         self.ent_tgt.pack(fill="x", pady=(5,0))
-        ToolTip(self.ent_tgt, "Lingua in cui tradurre il testo.")
+        ToolTip(self.ent_tgt, self.tr("Lingua in cui tradurre il testo."))
 
-        ttk.Label(c_task, text="Contesto Gioco / Progetto", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w", pady=(10, 0))
+        ttk.Label(c_task, text=self.tr("Contesto Gioco / Progetto"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w", pady=(10, 0))
         self.ent_gamename = PlaceholderEntry(c_task, "Es. 'The Witcher 3' o 'App Gestionale'")
         self.ent_gamename.pack(fill="x", pady=(5,0))
-        ToolTip(self.ent_gamename, "Nome del progetto per dare contesto all'AI e migliorare la coerenza.")
+        ToolTip(self.ent_gamename, self.tr("Nome del progetto per dare contesto all'AI e migliorare la coerenza."))
 
         # CARD: FILES
-        c_file = self._create_card(container, "Gestione File")
+        c_file = self._create_card(container, self.tr("Gestione File"))
         
         # Input
         f_in = tk.Frame(c_file, bg=C_CARD_BG)
         f_in.pack(fill="x", pady=(0, 10))
-        ttk.Label(f_in, text="Cartella Input", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_in, text=self.tr("Cartella Input"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         f_in_row = tk.Frame(f_in, bg=C_CARD_BG)
         f_in_row.pack(fill="x", pady=(5,0))
         self.ent_input = ttk.Entry(f_in_row)
         self.ent_input.insert(0, "input")
         self.ent_input.pack(side="left", fill="x", expand=True)
-        ttk.Button(f_in_row, text="Sfoglia", command=lambda: self._browse_folder(self.ent_input, is_input=True)).pack(side="right", padx=(10,0))
-        ToolTip(self.ent_input, "Cartella contenente i file da tradurre.")
+        ttk.Button(f_in_row, text=self.tr("Sfoglia"), command=lambda: self._browse_folder(self.ent_input, is_input=True)).pack(side="right", padx=(10,0))
+        ToolTip(self.ent_input, self.tr("Cartella contenente i file da tradurre."))
         
         # Output
         f_out = tk.Frame(c_file, bg=C_CARD_BG)
         f_out.pack(fill="x", pady=(0, 15))
-        ttk.Label(f_out, text="Cartella Output", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_out, text=self.tr("Cartella Output"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         f_out_row = tk.Frame(f_out, bg=C_CARD_BG)
         f_out_row.pack(fill="x", pady=(5,0))
         self.ent_output = ttk.Entry(f_out_row)
         self.ent_output.insert(0, "output")
         self.ent_output.pack(side="left", fill="x", expand=True)
-        ttk.Button(f_out_row, text="Sfoglia", command=lambda: self._browse_folder(self.ent_output)).pack(side="right", padx=(10,0))
-        ToolTip(self.ent_output, "Cartella dove verranno salvati i file tradotti.")
+        ttk.Button(f_out_row, text=self.tr("Sfoglia"), command=lambda: self._browse_folder(self.ent_output)).pack(side="right", padx=(10,0))
+        ToolTip(self.ent_output, self.tr("Cartella dove verranno salvati i file tradotti."))
         
         # Format
         f_opt = tk.Frame(c_file, bg=C_CARD_BG)
@@ -467,43 +715,43 @@ class AlumenGUI:
         
         f_fmt = tk.Frame(f_opt, bg=C_CARD_BG)
         f_fmt.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        ttk.Label(f_fmt, text="Formato File", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_fmt, text=self.tr("Formato File"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.cmb_fmt = ttk.Combobox(f_fmt, values=["csv", "json", "xlsx", "po", "srt"], width=10, state="readonly")
         self.cmb_fmt.current(0)
         self.cmb_fmt.bind("<<ComboboxSelected>>", self._update_ui_states)
         self.cmb_fmt.pack(fill="x", pady=(5,0))
-        ToolTip(self.cmb_fmt, "Seleziona il formato dei file da elaborare.")
+        ToolTip(self.cmb_fmt, self.tr("Seleziona il formato dei file da elaborare."))
         
         f_enc = tk.Frame(f_opt, bg=C_CARD_BG)
         f_enc.pack(side="left", fill="x", expand=True)
-        ttk.Label(f_enc, text="Encoding", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_enc, text=self.tr("Encoding"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_encoding = PlaceholderEntry(f_enc, "utf-8", width=10)
         self.ent_encoding.pack(fill="x", pady=(5,0))
-        ToolTip(self.ent_encoding, "Codifica dei file (es. utf-8, cp1252).")
+        ToolTip(self.ent_encoding, self.tr("Codifica dei file (es. utf-8, cp1252)."))
 
         # CARD: TELEGRAM
-        c_tg = self._create_card(container, "Notifiche Telegram")
+        c_tg = self._create_card(container, self.tr("Notifiche Telegram"))
         self.var_tg_enabled = tk.BooleanVar(value=False)
-        cb_tg = ttk.Checkbutton(c_tg, text="Abilita Notifiche", variable=self.var_tg_enabled, style="Card.TCheckbutton", command=self._toggle_telegram_ui)
+        cb_tg = ttk.Checkbutton(c_tg, text=self.tr("Abilita Notifiche"), variable=self.var_tg_enabled, style="Card.TCheckbutton", command=self._toggle_telegram_ui)
         cb_tg.pack(anchor="w", pady=(0, 10))
-        ToolTip(cb_tg, "Abilita l'invio di log e stato via Telegram.")
+        ToolTip(cb_tg, self.tr("Abilita l'invio di log e stato via Telegram."))
         
         f_tg = tk.Frame(c_tg, bg=C_CARD_BG)
         f_tg.pack(fill="x")
         
         f_tg1 = tk.Frame(f_tg, bg=C_CARD_BG)
         f_tg1.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        ttk.Label(f_tg1, text="Bot Token", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_tg1, text=self.tr("Bot Token"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_tg_token = ttk.Entry(f_tg1)
         self.ent_tg_token.pack(fill="x", pady=(5,0))
-        ToolTip(self.ent_tg_token, "Token del bot Telegram (da BotFather).")
+        ToolTip(self.ent_tg_token, self.tr("Token del bot Telegram (da BotFather)."))
         
         f_tg2 = tk.Frame(f_tg, bg=C_CARD_BG)
         f_tg2.pack(side="left", fill="x", expand=True)
-        ttk.Label(f_tg2, text="Chat ID", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_tg2, text=self.tr("Chat ID"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_tg_chatid = ttk.Entry(f_tg2)
         self.ent_tg_chatid.pack(fill="x", pady=(5,0))
-        ToolTip(self.ent_tg_chatid, "ID della chat o del canale dove ricevere le notifiche.")
+        ToolTip(self.ent_tg_chatid, self.tr("ID della chat o del canale dove ricevere le notifiche."))
         
         self.btn_tg_save = ttk.Button(f_tg, text="💾", width=4, command=self._save_telegram_config)
         self.btn_tg_save.pack(side="left", padx=(10,0), pady=(20,0))
@@ -517,10 +765,10 @@ class AlumenGUI:
         container = ttk.Frame(sf.scrollable_frame, padding=40)
         container.pack(fill="both", expand=True)
         
-        tk.Label(container, text="Impostazioni Avanzate", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
+        tk.Label(container, text=self.tr("Impostazioni Avanzate"), bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
         
         # CARD: FORMATO
-        c_spec = self._create_card(container, "Specifiche Formato")
+        c_spec = self._create_card(container, self.tr("Specifiche Formato"))
         
         # CSV
         f_csv = tk.Frame(c_spec, bg=C_CARD_BG)
@@ -528,28 +776,28 @@ class AlumenGUI:
         
         # Grid Layout 2x2 for CSV
         f_00 = self._make_grid_frame(f_csv, 0, 0)
-        ttk.Label(f_00, text="Delimitatore CSV", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_00, text=self.tr("Delimitatore CSV"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_delim = PlaceholderEntry(f_00, ",", width=5)
         self.ent_delim.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_delim, "Carattere che separa le colonne nel file CSV (es. virgola ',' o punto e virgola ';').")
+        ToolTip(self.ent_delim, self.tr("Carattere che separa le colonne nel file CSV (es. virgola ',' o punto e virgola ';')."))
 
         f_01 = self._make_grid_frame(f_csv, 0, 1)
-        ttk.Label(f_01, text="Indice Col. Origine (0=A)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_01, text=self.tr("Indice Col. Origine (0=A)"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_col = PlaceholderEntry(f_01, "3", width=5)
         self.ent_col.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_col, "Indice numerico della colonna da tradurre. La prima colonna è 0.")
+        ToolTip(self.ent_col, self.tr("Indice numerico della colonna da tradurre. La prima colonna è 0."))
 
         f_10 = self._make_grid_frame(f_csv, 1, 0)
-        ttk.Label(f_10, text="Indice Col. Destinazione", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_10, text=self.tr("Indice Col. Destinazione"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_col_out = PlaceholderEntry(f_10, "3", width=5)
         self.ent_col_out.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_col_out, "Indice numerico della colonna in cui salvare la traduzione. Se uguale all'origine, sovrascriverà i testi originali.")
+        ToolTip(self.ent_col_out, self.tr("Indice numerico della colonna in cui salvare la traduzione. Se uguale all'origine, sovrascriverà i testi originali."))
 
         f_11 = self._make_grid_frame(f_csv, 1, 1)
-        ttk.Label(f_11, text="Limite Max Colonne", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_11, text=self.tr("Limite Max Colonne"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_maxcols = PlaceholderEntry(f_11, "None", width=5)
         self.ent_maxcols.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_maxcols, "Ignora le righe che hanno più di N colonne. Utile per saltare righe di commento mal formattate.")
+        ToolTip(self.ent_maxcols, self.tr("Ignora le righe che hanno più di N colonne. Utile per saltare righe di commento mal formattate."))
 
         ttk.Separator(c_spec, orient="horizontal").pack(fill="x", pady=15)
 
@@ -558,15 +806,15 @@ class AlumenGUI:
         f_json.pack(fill="x")
         f_j_in = tk.Frame(f_json, bg=C_CARD_BG)
         f_j_in.pack(side="left", fill="x", expand=True)
-        ttk.Label(f_j_in, text="Chiavi JSON da Tradurre", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_j_in, text=self.tr("Chiavi JSON da Tradurre"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_jkeys = PlaceholderEntry(f_j_in, "es. title, description, text")
         self.ent_jkeys.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_jkeys, "Elenco delle chiavi JSON che contengono testo da tradurre (separate da virgola). Obbligatorio per elaborare i JSON.")
+        ToolTip(self.ent_jkeys, self.tr("Elenco delle chiavi JSON che contengono testo da tradurre (separate da virgola). Obbligatorio per elaborare i JSON."))
         
         self.var_jmatch = tk.BooleanVar(value=False)
-        cb_j = ttk.Checkbutton(f_json, text="Corrispondenza Percorso Esatto", variable=self.var_jmatch, style="Card.TCheckbutton")
+        cb_j = ttk.Checkbutton(f_json, text=self.tr("Corrispondenza Percorso Esatto"), variable=self.var_jmatch, style="Card.TCheckbutton")
         cb_j.pack(side="left", padx=20, pady=(15,0))
-        ToolTip(cb_j, "Se attivo, controlla l'intera gerarchia della chiave (es. 'dialogue.npc.text' invece di considerare qualsiasi chiave 'text').")
+        ToolTip(cb_j, self.tr("Se attivo, controlla l'intera gerarchia della chiave (es. 'dialogue.npc.text' invece di considerare qualsiasi chiave 'text')."))
 
         ttk.Separator(c_spec, orient="horizontal").pack(fill="x", pady=15)
 
@@ -576,45 +824,45 @@ class AlumenGUI:
         
         f_x1 = tk.Frame(f_xlsx, bg=C_CARD_BG)
         f_x1.pack(side="left", fill="x", expand=True)
-        ttk.Label(f_x1, text="Lettera Col. Origine (es. A,C)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_x1, text=self.tr("Lettera Col. Origine (es. A,C)"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_xlsx_src = PlaceholderEntry(f_x1, "A", width=5)
         self.ent_xlsx_src.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_xlsx_src, "Lettera della colonna originale. Usa la virgola per indicarne multiple (es. A,C,E).")
+        ToolTip(self.ent_xlsx_src, self.tr("Lettera della colonna originale. Usa la virgola per indicarne multiple (es. A,C,E)."))
 
         f_x2 = tk.Frame(f_xlsx, bg=C_CARD_BG)
         f_x2.pack(side="left", fill="x", expand=True, padx=(20, 0))
-        ttk.Label(f_x2, text="Lettera Col. Destinaz. (es. B,D)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_x2, text=self.tr("Lettera Col. Destinaz. (es. B,D)"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_xlsx_tgt = PlaceholderEntry(f_x2, "B", width=5)
         self.ent_xlsx_tgt.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_xlsx_tgt, "Lettera di destinazione. Usa la virgola (es. B,D,F) per abbinarle alle origini.")
+        ToolTip(self.ent_xlsx_tgt, self.tr("Lettera di destinazione. Usa la virgola (es. B,D,F) per abbinarle alle origini."))
 
         # CARD: PROMPT
-        c_ctx = self._create_card(container, "Prompt Engineering")
+        c_ctx = self._create_card(container, self.tr("Prompt Engineering"))
         
-        ttk.Label(c_ctx, text="Custom Prompt (SOVRASCRIVE regole base)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(c_ctx, text=self.tr("Custom Prompt (SOVRASCRIVE regole base)"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_prompt = PlaceholderEntry(c_ctx, "ATTENZIONE: Sostituisce il prompt base. Devi includere '{text_to_translate}'")
         self.ent_prompt.pack(fill="x", pady=(5, 15))
-        ToolTip(self.ent_prompt, "⚠️ Sostituisce in blocco il prompt di base di Alumen. Usa solo per esperimenti estremi. Richiede {text_to_translate}.")
+        ToolTip(self.ent_prompt, self.tr("⚠️ Sostituisce in blocco il prompt di base di Alumen. Usa solo per esperimenti estremi. Richiede {text_to_translate}."))
         
-        ttk.Label(c_ctx, text="Contesto Fisso (Aggiunta rapida)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(c_ctx, text=self.tr("Contesto Fisso (Aggiunta rapida)"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_pctx = PlaceholderEntry(c_ctx, "Es. 'Il protagonista è una donna', 'Ambientazione sci-fi'")
         self.ent_pctx.pack(fill="x", pady=(5, 15))
-        ToolTip(self.ent_pctx, "Aggiunge una singola frase informativa alla fine delle regole standard per chiarire la trama.")
+        ToolTip(self.ent_pctx, self.tr("Aggiunge una singola frase informativa alla fine delle regole standard per chiarire la trama."))
         
         f_chk_ctx = tk.Frame(c_ctx, bg=C_CARD_BG)
         f_chk_ctx.pack(fill="x")
         self.var_file_ctx = tk.BooleanVar(value=False)
         self.var_full_sample = tk.BooleanVar(value=False)
-        cb_fc = ttk.Checkbutton(f_chk_ctx, text="Analisi Preliminare File (Auto-Context)", variable=self.var_file_ctx, style="Card.TCheckbutton", command=self._update_ui_states)
+        cb_fc = ttk.Checkbutton(f_chk_ctx, text=self.tr("Analisi Preliminare File (Auto-Context)"), variable=self.var_file_ctx, style="Card.TCheckbutton", command=self._update_ui_states)
         cb_fc.pack(side="left", padx=(0,20))
-        ToolTip(cb_fc, "Legge le prime righe del file per generare un contesto automatico.")
+        ToolTip(cb_fc, self.tr("Legge le prime righe del file per generare un contesto automatico."))
         
-        self.cb_full_sample = ttk.Checkbutton(f_chk_ctx, text="Full Sample (Più lento)", variable=self.var_full_sample, style="Card.TCheckbutton")
+        self.cb_full_sample = ttk.Checkbutton(f_chk_ctx, text=self.tr("Full Sample (Più lento)"), variable=self.var_full_sample, style="Card.TCheckbutton")
         self.cb_full_sample.pack(side="left")
-        ToolTip(self.cb_full_sample, "Usa tutto il file per generare il contesto (più costoso/lento).")
+        ToolTip(self.cb_full_sample, self.tr("Usa tutto il file per generare il contesto (più costoso/lento)."))
 
         # CARD: LOGICA
-        c_perf = self._create_card(container, "Logica & Performance")
+        c_perf = self._create_card(container, self.tr("Logica & Performance"))
         
         f_chk = tk.Frame(c_perf, bg=C_CARD_BG)
         f_chk.pack(fill="x", pady=(0, 20))
@@ -648,49 +896,49 @@ class AlumenGUI:
         ]
         for i, (txt, var, tip) in enumerate(checks):
             cmd = self._update_ui_states if txt == "Salva Cache" else None
-            cb = ttk.Checkbutton(f_chk, text=txt, variable=var, style="Card.TCheckbutton", command=cmd)
+            cb = ttk.Checkbutton(f_chk, text=self.tr(txt), variable=var, style="Card.TCheckbutton", command=cmd)
             cb.grid(row=i//3, column=i%3, padx=10, pady=8, sticky="w")
-            ToolTip(cb, tip)
+            ToolTip(cb, self.tr(tip))
 
         f_num = tk.Frame(c_perf, bg=C_CARD_BG)
         f_num.pack(fill="x", pady=(0, 15))
         
         # Grid Layout 2x3 for Numeric Params
         f_n00 = self._make_grid_frame(f_num, 0, 0)
-        ttk.Label(f_n00, text="Batch Size", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_n00, text=self.tr("Batch Size"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_batch = PlaceholderEntry(f_n00, "30", width=6)
         self.ent_batch.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_batch, "Righe per richiesta.")
+        ToolTip(self.ent_batch, self.tr("Righe per richiesta."))
 
         f_n01 = self._make_grid_frame(f_num, 0, 1)
-        ttk.Label(f_n01, text="RPM Limit", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_n01, text=self.tr("RPM Limit"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_rpm = PlaceholderEntry(f_n01, "Max", width=6)
         self.ent_rpm.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_rpm, "Richieste per minuto massime.")
+        ToolTip(self.ent_rpm, self.tr("Richieste per minuto massime."))
 
         f_n10 = self._make_grid_frame(f_num, 1, 0)
-        ttk.Label(f_n10, text="Max Entries", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_n10, text=self.tr("Max Entries"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_maxentr = PlaceholderEntry(f_n10, "None", width=6)
         self.ent_maxentr.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_maxentr, "Limite righe per file.")
+        ToolTip(self.ent_maxentr, self.tr("Limite righe per file."))
 
         f_n11 = self._make_grid_frame(f_num, 1, 1)
-        ttk.Label(f_n11, text="Ctx Window", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_n11, text=self.tr("Ctx Window"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_ctxwin = PlaceholderEntry(f_n11, "0", width=6)
         self.ent_ctxwin.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_ctxwin, "Righe precedenti da inviare come contesto.")
+        ToolTip(self.ent_ctxwin, self.tr("Righe precedenti da inviare come contesto."))
 
         f_n20 = self._make_grid_frame(f_num, 2, 0)
-        ttk.Label(f_n20, text="Wrap At", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_n20, text=self.tr("Wrap At"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_wrap = PlaceholderEntry(f_n20, "None", width=6)
         self.ent_wrap.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_wrap, "A capo automatico dopo N caratteri.")
+        ToolTip(self.ent_wrap, self.tr("A capo automatico dopo N caratteri."))
 
         f_n21 = self._make_grid_frame(f_num, 2, 1)
-        ttk.Label(f_n21, text="Newline Char", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_n21, text=self.tr("Newline Char"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         self.ent_newline = PlaceholderEntry(f_n21, "\\n", width=6)
         self.ent_newline.pack(fill="x", pady=(2,0))
-        ToolTip(self.ent_newline, "Carattere per l'a capo (es. \\n).")
+        ToolTip(self.ent_newline, self.tr("Carattere per l'a capo (es. \\n)."))
 
         # Glossario & Cache
         ttk.Separator(c_perf, orient="horizontal").pack(fill="x", pady=10)
@@ -700,30 +948,30 @@ class AlumenGUI:
         
         f_glo = tk.Frame(f_files, bg=C_CARD_BG)
         f_glo.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        ttk.Label(f_glo, text="Glossario CSV", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_glo, text=self.tr("Glossario CSV"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         f_glo_in = tk.Frame(f_glo, bg=C_CARD_BG)
         f_glo_in.pack(fill="x", pady=(2,0))
         self.ent_gloss = ttk.Entry(f_glo_in)
         self.ent_gloss.pack(side="left", fill="x", expand=True)
         if os.path.exists("glossary.csv"): self.ent_gloss.insert(0, "glossary.csv")
         ttk.Button(f_glo_in, text="...", width=3, command=lambda: self._browse_file(self.ent_gloss)).pack(side="right", padx=(5,0))
-        ToolTip(self.ent_gloss, "File CSV con termini forzati (Originale,Traduzione).")
+        ToolTip(self.ent_gloss, self.tr("File CSV con termini forzati (Originale,Traduzione)."))
         
         # --- MODIFICA: STYLE GUIDE ---
         f_style = tk.Frame(f_files, bg=C_CARD_BG)
         f_style.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        ttk.Label(f_style, text="Style Guide (.txt - Manuale Regole)", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_style, text=self.tr("Style Guide (.txt - Manuale Regole)"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         f_style_in = tk.Frame(f_style, bg=C_CARD_BG)
         f_style_in.pack(fill="x", pady=(2,0))
         self.ent_style = ttk.Entry(f_style_in)
         self.ent_style.pack(side="left", fill="x", expand=True)
         ttk.Button(f_style_in, text="...", width=3, command=lambda: self._browse_file(self.ent_style)).pack(side="right", padx=(5,0))
-        ToolTip(self.ent_style, "Allega un file di testo con regole dettagliate di formattazione e tono di voce (es. dare del Voi, stile UI).")
+        ToolTip(self.ent_style, self.tr("Allega un file di testo con regole dettagliate di formattazione e tono di voce (es. dare del Voi, stile UI)."))
         # -----------------------------
 
         f_ca = tk.Frame(f_files, bg=C_CARD_BG)
         f_ca.pack(side="left", fill="x", expand=True)
-        ttk.Label(f_ca, text="File Cache JSON", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_ca, text=self.tr("File Cache JSON"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         f_ca_in = tk.Frame(f_ca, bg=C_CARD_BG)
         f_ca_in.pack(fill="x", pady=(2,0))
         self.ent_cache_file = ttk.Entry(f_ca_in)
@@ -731,7 +979,7 @@ class AlumenGUI:
         if os.path.exists(AlumenCore.DEFAULT_CACHE_FILE): self.ent_cache_file.insert(0, AlumenCore.DEFAULT_CACHE_FILE)
         self.btn_cache_browse = ttk.Button(f_ca_in, text="...", width=3, command=lambda: self._browse_file(self.ent_cache_file))
         self.btn_cache_browse.pack(side="right", padx=(5,0))
-        ToolTip(self.btn_cache_browse, "File JSON dove salvare/caricare le traduzioni.")
+        ToolTip(self.btn_cache_browse, self.tr("File JSON dove salvare/caricare le traduzioni."))
 
     # --- PAGE 3: API MANAGEMENT (NUOVA) ---
     def _build_page_api(self, parent):
@@ -740,18 +988,16 @@ class AlumenGUI:
         container = ttk.Frame(sf.scrollable_frame, padding=40)
         container.pack(fill="both", expand=True)
         
-        tk.Label(container, text="Gestione Chiavi API", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
+        tk.Label(container, text=self.tr("Gestione Chiavi API"), bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
         
         # CARD: LISTA API
-        c_list = self._create_card(container, "Chiavi Caricate")
+        c_list = self._create_card(container, self.tr("Chiavi Caricate"))
         
         # Treeview
         cols = ("idx", "key", "status", "calls")
         self.tree_api = ttk.Treeview(c_list, columns=cols, show='headings', height=10)
-        self.tree_api.heading("idx", text="#")
-        self.tree_api.heading("key", text="Chiave (Ultime cifre)")
-        self.tree_api.heading("status", text="Stato")
-        self.tree_api.heading("calls", text="Chiamate")
+        self.tree_api.heading("status", text=self.tr("Stato"))
+        self.tree_api.heading("calls", text=self.tr("Chiamate"))
         
         self.tree_api.column("idx", width=40, anchor="center")
         self.tree_api.column("key", width=150, anchor="center")
@@ -770,12 +1016,12 @@ class AlumenGUI:
         self.ent_new_api = PlaceholderEntry(f_act, "Incolla nuova API Key qui...")
         self.ent_new_api.pack(side="left", fill="x", expand=True, padx=(0, 10))
         
-        ttk.Button(f_act, text="➕ Aggiungi", style='Action.TButton', command=self._api_add).pack(side="left")
-        ttk.Button(f_act, text="🗑️ Rimuovi Selez.", command=self._api_remove).pack(side="left", padx=5)
-        ttk.Button(f_act, text="🚫 Blacklist", style='Warn.TButton', command=self._api_blacklist).pack(side="left", padx=5)
-        ttk.Button(f_act, text="✅ Reset Tutte", command=self._api_reset).pack(side="right")
+        ttk.Button(f_act, text=self.tr("➕ Aggiungi"), style='Action.TButton', command=self._api_add).pack(side="left")
+        ttk.Button(f_act, text=self.tr("🗑️ Rimuovi Selez."), command=self._api_remove).pack(side="left", padx=5)
+        ttk.Button(f_act, text=self.tr("🚫 Blacklist"), style='Warn.TButton', command=self._api_blacklist).pack(side="left", padx=5)
+        ttk.Button(f_act, text=self.tr("✅ Reset Tutte"), command=self._api_reset).pack(side="right")
         
-        ttk.Button(c_list, text="🔄 Aggiorna Lista", command=self._refresh_api_list).pack(anchor="e", pady=(10,0))
+        ttk.Button(c_list, text=self.tr("🔄 Aggiorna Lista"), command=self._refresh_api_list).pack(anchor="e", pady=(10,0))
 
     # --- PAGE 4: TOOLS ---
     def _build_page_tools(self, parent):
@@ -784,33 +1030,33 @@ class AlumenGUI:
         container = ttk.Frame(sf.scrollable_frame, padding=40)
         container.pack(fill="both", expand=True)
         
-        tk.Label(container, text="Strumenti di Utilità", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
+        tk.Label(container, text=self.tr("Strumenti di Utilità"), bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(anchor="w", pady=(0, 30))
 
         # --- MODIFICA: CARD DRY RUN ---
-        c_dry = self._create_card(container, "Analisi e Preventivo")
-        ttk.Label(c_dry, text="Esegui una simulazione per calcolare token e costi stimati senza tradurre.", style='Card.TLabel').pack(anchor="w", pady=(0,10))
+        c_dry = self._create_card(container, self.tr("Analisi e Preventivo"))
+        ttk.Label(c_dry, text=self.tr("Esegui una simulazione per calcolare token e costi stimati senza tradurre."), style='Card.TLabel').pack(anchor="w", pady=(0,10))
         
         f_dry_act = tk.Frame(c_dry, bg=C_CARD_BG)
         f_dry_act.pack(fill="x")
         
         # Checkbox sincronizzata con la variabile globale
-        cb_dry = ttk.Checkbutton(f_dry_act, text="Abilita Modalità Dry Run", variable=self.var_dry, style="Card.TCheckbutton")
+        cb_dry = ttk.Checkbutton(f_dry_act, text=self.tr("Abilita Modalità Dry Run"), variable=self.var_dry, style="Card.TCheckbutton")
         cb_dry.pack(side="left")
         
-        btn_dry = ttk.Button(f_dry_act, text="Avvia Analisi Dry Run", style='Action.TButton', command=self._run_dry_run_tool)
+        btn_dry = ttk.Button(f_dry_act, text=self.tr("Avvia Analisi Dry Run"), style='Action.TButton', command=self._run_dry_run_tool)
         btn_dry.pack(side="right")
-        ToolTip(btn_dry, "Lancia il processo in modalità simulazione.")
+        ToolTip(btn_dry, self.tr("Lancia il processo in modalità simulazione."))
         # ------------------------------
 
         # EXTRACTOR
-        c_ex = self._create_card(container, "Estrattore Cache")
+        c_ex = self._create_card(container, self.tr("Estrattore Cache"))
         
         f_ex_paths = tk.Frame(c_ex, bg=C_CARD_BG)
         f_ex_paths.pack(fill="x", pady=(0, 15))
         
         f_src = tk.Frame(f_ex_paths, bg=C_CARD_BG)
         f_src.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        ttk.Label(f_src, text="Cartella Originali", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_src, text=self.tr("Cartella Originali"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         f_src_in = tk.Frame(f_src, bg=C_CARD_BG)
         f_src_in.pack(fill="x", pady=(2,0))
         self.ent_ex_src = ttk.Entry(f_src_in)
@@ -819,7 +1065,7 @@ class AlumenGUI:
         
         f_tgt = tk.Frame(f_ex_paths, bg=C_CARD_BG)
         f_tgt.pack(side="left", fill="x", expand=True)
-        ttk.Label(f_tgt, text="Cartella Tradotti", style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
+        ttk.Label(f_tgt, text=self.tr("Cartella Tradotti"), style='Card.TLabel', font=F_SMALL, foreground=C_TEXT_SEC).pack(anchor="w")
         f_tgt_in = tk.Frame(f_tgt, bg=C_CARD_BG)
         f_tgt_in.pack(fill="x", pady=(2,0))
         self.ent_ex_tgt = ttk.Entry(f_tgt_in)
@@ -829,7 +1075,7 @@ class AlumenGUI:
         f_ex_opts = tk.Frame(c_ex, bg=C_CARD_BG)
         f_ex_opts.pack(fill="x", pady=(0, 15))
         
-        ttk.Label(f_ex_opts, text="Formato:", style='Card.TLabel').pack(side="left")
+        ttk.Label(f_ex_opts, text=self.tr("Formato:"), style='Card.TLabel').pack(side="left")
         self.cmb_ex_fmt = ttk.Combobox(f_ex_opts, values=["csv", "json", "po"], width=10, state="readonly")
         self.cmb_ex_fmt.current(0)
         self.cmb_ex_fmt.bind("<<ComboboxSelected>>", self._update_extractor_ui)
@@ -843,36 +1089,36 @@ class AlumenGUI:
         
         f_c1 = tk.Frame(self.f_ex_csv_opts, bg=C_CARD_BG)
         f_c1.pack(side="left", expand=True, fill="x")
-        ttk.Label(f_c1, text="Col. Orig:", style='Card.TLabel', font=F_SMALL).pack(side="left")
+        ttk.Label(f_c1, text=self.tr("Col. Orig:"), style='Card.TLabel', font=F_SMALL).pack(side="left")
         self.ent_ex_col_src.pack(side="left", padx=(5, 15), fill="x", expand=True)
         
         f_c2 = tk.Frame(self.f_ex_csv_opts, bg=C_CARD_BG)
         f_c2.pack(side="left", expand=True, fill="x")
-        ttk.Label(f_c2, text="Col. Trad:", style='Card.TLabel', font=F_SMALL).pack(side="left")
+        ttk.Label(f_c2, text=self.tr("Col. Trad:"), style='Card.TLabel', font=F_SMALL).pack(side="left")
         self.ent_ex_col_tgt.pack(side="left", padx=(5, 0), fill="x", expand=True)
 
         self.f_ex_json_opts = tk.Frame(f_ex_opts, bg=C_CARD_BG)
         self.ent_ex_json_keys = PlaceholderEntry(self.f_ex_json_opts, "es. title, description")
-        ttk.Label(self.f_ex_json_opts, text="Keys:", style='Card.TLabel', font=F_SMALL).pack(side="left")
+        ttk.Label(self.f_ex_json_opts, text=self.tr("Keys:"), style='Card.TLabel', font=F_SMALL).pack(side="left")
         self.ent_ex_json_keys.pack(side="left", padx=(5, 0), fill="x", expand=True)
 
-        btn_ex = ttk.Button(c_ex, text="Esegui Estrazione", style='Action.TButton', command=self._run_extractor_tool)
+        btn_ex = ttk.Button(c_ex, text=self.tr("Esegui Estrazione"), style='Action.TButton', command=self._run_extractor_tool)
         btn_ex.pack(anchor="e")
-        ToolTip(btn_ex, "Crea un file cache JSON confrontando i file originali e tradotti.")
+        ToolTip(btn_ex, self.tr("Crea un file cache JSON confrontando i file originali e tradotti."))
         self._update_extractor_ui()
 
         # SCANNER
-        c_scan = self._create_card(container, "Auto-Glossary Scanner")
-        ttk.Label(c_scan, text="Analizza i file per trovare Nomi Propri e Termini Unici.", style='Card.TLabel').pack(anchor="w", pady=(0,10))
+        c_scan = self._create_card(container, self.tr("Auto-Glossary Scanner"))
+        ttk.Label(c_scan, text=self.tr("Analizza i file per trovare Nomi Propri e Termini Unici."), style='Card.TLabel').pack(anchor="w", pady=(0,10))
         f_scan = tk.Frame(c_scan, bg=C_CARD_BG)
         f_scan.pack(fill="x")
-        ttk.Label(f_scan, text="Formato File:", style='Card.TLabel').pack(side="left")
+        ttk.Label(f_scan, text=self.tr("Formato File:"), style='Card.TLabel').pack(side="left")
         self.cmb_scan_fmt = ttk.Combobox(f_scan, values=["csv", "json", "po", "srt"], width=10, state="readonly")
         self.cmb_scan_fmt.current(0)
         self.cmb_scan_fmt.pack(side="left", padx=(10, 20))
-        btn_sc = ttk.Button(f_scan, text="Avvia Scansione", style='Action.TButton', command=self._run_scanner_tool)
+        btn_sc = ttk.Button(f_scan, text=self.tr("Avvia Scansione"), style='Action.TButton', command=self._run_scanner_tool)
         btn_sc.pack(side="right")
-        ToolTip(btn_sc, "Usa l'AI per estrarre una lista di termini univoci dai file di input.")
+        ToolTip(btn_sc, self.tr("Usa l'AI per estrarre una lista di termini univoci dai file di input."))
 
     # --- PAGE 5: LOG ---
     def _build_page_log(self, parent):
@@ -881,17 +1127,17 @@ class AlumenGUI:
         
         f_head = tk.Frame(container, bg=C_MAIN_BG)
         f_head.pack(fill="x", pady=(0, 15))
-        tk.Label(f_head, text="Console di Esecuzione", bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(side="left")
+        tk.Label(f_head, text=self.tr("Console di Esecuzione"), bg=C_MAIN_BG, fg=C_TEXT_MAIN, font=F_H1).pack(side="left")
         
         # --- MODIFICA: Pulsante Vedi Prompt ---
-        self.btn_view_prompt = ttk.Button(f_head, text="👁️ Vedi Prompt", command=self._show_last_prompt)
+        self.btn_view_prompt = ttk.Button(f_head, text=self.tr("👁️ Vedi Prompt"), command=self._show_last_prompt)
         self.btn_view_prompt.pack(side="right", padx=(10, 0))
-        ToolTip(self.btn_view_prompt, "Visualizza l'ultimo prompt inviato all'AI.")
+        ToolTip(self.btn_view_prompt, self.tr("Visualizza l'ultimo prompt inviato all'AI."))
         # --------------------------------------
 
-        self.btn_save_cache = ttk.Button(f_head, text="💾 Salva Cache", command=self._force_save_cache)
+        self.btn_save_cache = ttk.Button(f_head, text=self.tr("💾 Salva Cache"), command=self._force_save_cache)
         self.btn_save_cache.pack(side="right")
-        ToolTip(self.btn_save_cache, "Forza il salvataggio immediato della cache su disco.")
+        ToolTip(self.btn_save_cache, self.tr("Forza il salvataggio immediato della cache su disco."))
         
         # Stats Dashboard
         f_info = tk.Frame(container, bg=C_MAIN_BG)
@@ -907,14 +1153,14 @@ class AlumenGUI:
             tk.Label(card, text=label, bg=C_CARD_BG, font=F_SMALL, fg=C_TEXT_SEC).pack(pady=(0, 15))
             return l_val
 
-        self.lbl_stats_files = make_stat_card(f_info, 0, 0, "FILE COMPLETATI", C_ACCENT)
-        self.lbl_stats_entries = make_stat_card(f_info, 0, 1, "RIGHE TRADOTTE", C_SUCCESS)
-        self.lbl_stats_cache = make_stat_card(f_info, 0, 2, "VOCI IN CACHE", C_WARN)
-        self.lbl_stats_api_calls = make_stat_card(f_info, 0, 3, "CHIAMATE API", "#9D88E3")
+        self.lbl_stats_files = make_stat_card(f_info, 0, 0, self.tr("FILE COMPLETATI"), C_ACCENT)
+        self.lbl_stats_entries = make_stat_card(f_info, 0, 1, self.tr("RIGHE TRADOTTE"), C_SUCCESS)
+        self.lbl_stats_cache = make_stat_card(f_info, 0, 2, self.tr("VOCI IN CACHE"), C_WARN)
+        self.lbl_stats_api_calls = make_stat_card(f_info, 0, 3, self.tr("CHIAMATE API"), "#9D88E3")
         
-        self.lbl_stats_tokens_in = make_stat_card(f_info, 1, 0, "TOKEN INPUT", "#4EABA6")
-        self.lbl_stats_tokens_out = make_stat_card(f_info, 1, 1, "TOKEN OUTPUT", "#4EABA6")
-        self.lbl_stats_time = make_stat_card(f_info, 1, 2, "TEMPO TOTALE", "#E0E0E0", colspan=2)
+        self.lbl_stats_tokens_in = make_stat_card(f_info, 1, 0, self.tr("TOKEN INPUT"), "#4EABA6")
+        self.lbl_stats_tokens_out = make_stat_card(f_info, 1, 1, self.tr("TOKEN OUTPUT"), "#4EABA6")
+        self.lbl_stats_time = make_stat_card(f_info, 1, 2, self.tr("TEMPO TOTALE"), "#E0E0E0", colspan=2)
 
         # Terminal & Progress Wrapper
         c_term = tk.Frame(container, bg=C_CARD_BG, highlightbackground=C_BORDER, highlightthickness=1)
@@ -931,17 +1177,17 @@ class AlumenGUI:
         tk.Label(f_dots, text="⬤", fg="#FFBD2E", bg="#2D2D30", font=("Arial", 10)).pack(side="left", padx=2)
         tk.Label(f_dots, text="⬤", fg="#27C93F", bg="#2D2D30", font=("Arial", 10)).pack(side="left", padx=2)
 
-        tk.Label(f_term_head, text="Alumen Console Output", bg="#2D2D30", fg=C_TEXT_SEC, font=F_SMALL).pack(side="left", padx=10)
+        tk.Label(f_term_head, text=self.tr("Alumen Console Output"), bg="#2D2D30", fg=C_TEXT_SEC, font=F_SMALL).pack(side="left", padx=10)
 
         # Progress Bar under header
         f_prog = tk.Frame(c_term, bg=C_CARD_BG, pady=8, padx=15)
         f_prog.pack(fill="x")
         f_prog.columnconfigure(1, weight=1)
         
-        tk.Label(f_prog, text="Progresso:", bg=C_CARD_BG, font=F_SMALL, fg=C_TEXT_MAIN).grid(row=0, column=0, sticky="w", padx=(0,10))
+        tk.Label(f_prog, text=self.tr("Progresso:"), bg=C_CARD_BG, font=F_SMALL, fg=C_TEXT_MAIN).grid(row=0, column=0, sticky="w", padx=(0,10))
         self.progress_bar = ttk.Progressbar(f_prog, orient="horizontal", mode="determinate", style="Flat.Horizontal.TProgressbar")
         self.progress_bar.grid(row=0, column=1, sticky="ew")
-        self.lbl_file_status = tk.Label(f_prog, text="In attesa...", bg=C_CARD_BG, font=F_SMALL, fg=C_TEXT_SEC)
+        self.lbl_file_status = tk.Label(f_prog, text=self.tr("In attesa..."), bg=C_CARD_BG, font=F_SMALL, fg=C_TEXT_SEC)
         self.lbl_file_status.grid(row=0, column=2, sticky="e", padx=(10,0))
 
         # Terminal Text Area
@@ -965,21 +1211,21 @@ class AlumenGUI:
         
         for i in range(4): f_act.columnconfigure(i, weight=1, uniform="btn")
 
-        self.btn_run = ttk.Button(f_act, text="▶  AVVIA PROCESSO", style='Action.TButton', command=self._start_process)
+        self.btn_run = ttk.Button(f_act, text=self.tr("▶  AVVIA PROCESSO"), style='Action.TButton', command=self._start_process)
         self.btn_run.grid(row=0, column=0, sticky="ew", padx=(0, 5))
-        ToolTip(self.btn_run, "Avvia la traduzione con le impostazioni correnti.")
+        ToolTip(self.btn_run, self.tr("Avvia la traduzione con le impostazioni correnti."))
         
-        self.btn_pause = ttk.Button(f_act, text="⏸  PAUSA", style='Warn.TButton', command=self._toggle_pause, state='disabled')
+        self.btn_pause = ttk.Button(f_act, text=self.tr("⏸  PAUSA"), style='Warn.TButton', command=self._toggle_pause, state='disabled')
         self.btn_pause.grid(row=0, column=1, sticky="ew", padx=5)
-        ToolTip(self.btn_pause, "Mette in pausa il processo (completa il batch corrente).")
+        ToolTip(self.btn_pause, self.tr("Mette in pausa il processo (completa il batch corrente)."))
         
-        self.btn_skip = ttk.Button(f_act, text="⏭  SALTA FILE", style='Secondary.TButton', command=self._skip_file, state='disabled')
+        self.btn_skip = ttk.Button(f_act, text=self.tr("⏭  SALTA FILE"), style='Secondary.TButton', command=self._skip_file, state='disabled')
         self.btn_skip.grid(row=0, column=2, sticky="ew", padx=5)
-        ToolTip(self.btn_skip, "Interrompe il file corrente e passa al successivo.")
+        ToolTip(self.btn_skip, self.tr("Interrompe il file corrente e passa al successivo."))
         
-        self.btn_stop = ttk.Button(f_act, text="⏹  STOP", style='Danger.TButton', command=self._stop_process)
+        self.btn_stop = ttk.Button(f_act, text=self.tr("⏹  STOP"), style='Danger.TButton', command=self._stop_process)
         self.btn_stop.grid(row=0, column=3, sticky="ew", padx=(5, 0))
-        ToolTip(self.btn_stop, "Interrompe completamente il processo.")
+        ToolTip(self.btn_stop, self.tr("Interrompe completamente il processo."))
 
     # --- LOGIC ---
     def _toggle_ai_provider(self):
@@ -997,8 +1243,8 @@ class AlumenGUI:
         def _w():
             new_ver = AlumenCore.check_for_updates()
             if new_ver: 
-                self.status_var.set(f"Aggiornamento disponibile: v{new_ver}")
-                messagebox.showinfo("Aggiornamento", f"Versione {new_ver} disponibile su GitHub!")
+                self.status_var.set(self.tr("Aggiornamento disponibile: v") + str(new_ver))
+                messagebox.showinfo(self.tr("Aggiornamento"), f"Versione {new_ver} " + self.tr(" disponibile su GitHub!"))
         threading.Thread(target=_w, daemon=True).start()
 
     def _update_ui_states(self, event=None):
@@ -1057,13 +1303,13 @@ class AlumenGUI:
         t = self.ent_tg_token.get().strip()
         c = self.ent_tg_chatid.get().strip()
         if not t or not c:
-            messagebox.showwarning("Attenzione", "Inserisci Token e Chat ID")
+            messagebox.showwarning(self.tr("Attenzione"), self.tr("Inserisci Token e Chat ID"))
             return
         try:
             with open("telegram_config.json", "w") as f:
                 json.dump({"bot_token": t, "chat_id": c}, f, indent=4)
-            messagebox.showinfo("Fatto", "Salvataggio OK")
-        except Exception as e: messagebox.showerror("Errore", str(e))
+            messagebox.showinfo(self.tr("Fatto"), self.tr("Salvataggio OK"))
+        except Exception as e: messagebox.showerror(self.tr("Errore"), str(e))
 
     def _load_api_file(self):
         f = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt")])
@@ -1087,7 +1333,7 @@ class AlumenGUI:
     def _refresh_models_auto(self, override_key=None):
         key = override_key if override_key else self.ent_api.get().split(',')[0].strip()
         if not key: return
-        self.status_var.set("Recupero modelli...")
+        self.status_var.set(self.tr("Recupero modelli..."))
         def _w():
             ms = AlumenCore.fetch_available_models(key)
             def _u():
@@ -1095,23 +1341,23 @@ class AlumenGUI:
                     curr = self.cmb_model.get()
                     self.cmb_model['values'] = tuple(ms)
                     if curr not in ms: self.cmb_model.current(0)
-                    self.status_var.set("Modelli aggiornati")
-                else: self.status_var.set("Errore recupero modelli")
+                    self.status_var.set(self.tr("Modelli aggiornati"))
+                else: self.status_var.set(self.tr("Errore recupero modelli"))
             self.root.after(0, _u)
         threading.Thread(target=_w, daemon=True).start()
 
     def _refresh_ollama_models(self):
         host = self.ent_ollama_host.get()
         if not host: return
-        self.status_var.set("Connessione a Ollama...")
+        self.status_var.set(self.tr("Connessione a Ollama..."))
         def _w():
             models = AlumenCore.fetch_ollama_models(host)
             def _u():
                 self.cmb_ollama_model['values'] = tuple(models)
                 if models: 
                     self.cmb_ollama_model.current(0)
-                    self.status_var.set("Modelli Ollama caricati")
-                else: self.status_var.set("Nessun modello Ollama trovato")
+                    self.status_var.set(self.tr("Modelli Ollama caricati"))
+                else: self.status_var.set(self.tr("Nessun modello Ollama trovato"))
             self.root.after(0, _u)
         threading.Thread(target=_w, daemon=True).start()
 
@@ -1190,7 +1436,7 @@ class AlumenGUI:
                     remaining_entries = total - processed
                     est_seconds = int(remaining_entries * avg_time_per_entry)
                     m_rem, s_rem = divmod(est_seconds, 60)
-                    self.lbl_file_status.config(text=f"{processed}/{total} ({perc:.1f}%) - Stima fine file: {m_rem}m {s_rem}s")
+                    self.lbl_file_status.config(text=f"{processed}/{total} ({perc:.1f}%) - " + self.tr("Stima fine file: ") + f"{m_rem}m {s_rem}s")
                 else:
                     self.lbl_file_status.config(text=f"{processed}/{total} ({perc:.1f}%)")
             else:
@@ -1202,7 +1448,7 @@ class AlumenGUI:
         if self.current_page == "api":
             self._refresh_api_list()
 
-        if self.is_running: self.status_var.set(f"In esecuzione... {files} file completati")
+        if self.is_running: self.status_var.set(self.tr("In esecuzione...") + f" {files}" + self.tr(" file completati"))
         self.root.after(1000, self._update_stats)
 
     def _update_spinner(self):
@@ -1210,13 +1456,13 @@ class AlumenGUI:
             self.spinner_idx = (self.spinner_idx + 1) % len(self.spinner_chars)
             spin = self.spinner_chars[self.spinner_idx]
             files = AlumenCore.total_files_translated
-            self.status_var.set(f"{spin} In esecuzione... {files} file completati")
+            self.status_var.set(f"{spin} " + self.tr("In esecuzione...") + f" {files}" + self.tr(" file completati"))
         self.root.after(100, self._update_spinner)
 
     def _force_save_cache(self):
         if self.current_args and self.var_cache.get():
             AlumenCore.check_and_save_cache(self.current_args, force=True)
-            self.status_var.set("Cache salvata su disco")
+            self.status_var.set(self.tr("Cache salvata su disco"))
         else:
             class MockArgs: persistent_cache = True; cache_file = None
             AlumenCore.check_and_save_cache(MockArgs(), force=True)
@@ -1226,39 +1472,39 @@ class AlumenGUI:
         if self.pause_event.is_set():
             self.pause_event.clear() # Pause
             AlumenCore.pause_start_timestamp = time.time()
-            self.btn_pause.config(text="▶ RIPRENDI", style='Action.TButton')
-            self.status_var.set("Processo in PAUSA")
-            self.log_queue.put("⏸️ Richiesta di PAUSA inviata...") # Feedback immediato
+            self.btn_pause.config(text=self.tr("▶ RIPRENDI"), style='Action.TButton')
+            self.status_var.set(self.tr("Processo in PAUSA"))
+            self.log_queue.put(self.tr("⏸️ Richiesta di PAUSA inviata...")) # Feedback immediato
         else:
             self.pause_event.set() # Resume
             AlumenCore.total_paused_time += (time.time() - AlumenCore.pause_start_timestamp)
-            self.btn_pause.config(text="⏸ PAUSA", style='Warn.TButton')
-            self.status_var.set("Processo RIPRESO")
-            self.log_queue.put("▶️ Richiesta di RIPRESA inviata...") # Feedback immediato
+            self.btn_pause.config(text=self.tr("⏸ PAUSA"), style='Warn.TButton')
+            self.status_var.set(self.tr("Processo RIPRESO"))
+            self.log_queue.put(self.tr("▶️ Richiesta di RIPRESA inviata...")) # Feedback immediato
     def _skip_file(self):
         if not self.is_running: return
         self.skip_event.set()
-        self.status_var.set("Salto file corrente...")
-        self.log_queue.put("⏭️ Richiesta di SKIP FILE inviata...") # Feedback immediato
+        self.status_var.set(self.tr("Salto file corrente..."))
+        self.log_queue.put(self.tr("⏭️ Richiesta di SKIP FILE inviata...")) # Feedback immediato
     def _stop_process(self):
         if self.stop_event.is_set(): return
         self.stop_event.set()
         AlumenCore.final_elapsed_time = AlumenCore.get_elapsed_time()
-        self.log_queue.put("🛑 Richiesta di STOP inviata...") # Feedback immediato
+        self.log_queue.put(self.tr("🛑 Richiesta di STOP inviata...")) # Feedback immediato
         self.is_running = False
         self.btn_pause.config(state='disabled')
         self.btn_skip.config(state='disabled')
-        self.status_var.set("Processo INTERROTTO")
+        self.status_var.set(self.tr("Processo INTERROTTO"))
 
     # --- MODIFICA: Funzione per mostrare l'ultimo prompt ---
     def _show_last_prompt(self):
         prompt = AlumenCore.last_translation_prompt
         if not prompt:
-            messagebox.showinfo("Info", "Nessun prompt inviato finora.")
+            messagebox.showinfo(self.tr("Info"), self.tr("Nessun prompt inviato finora."))
             return
         
         top = tk.Toplevel(self.root)
-        top.title("Ultimo Prompt Inviato")
+        top.title(self.tr("Ultimo Prompt Inviato"))
         top.geometry("700x500")
         top.configure(bg=C_MAIN_BG)
         
@@ -1291,9 +1537,9 @@ class AlumenGUI:
         
         for i, k in enumerate(keys):
             short_k = f"...{k[-6:]}" if len(k) > 6 else k
-            status = "In Attesa"
-            if i == curr_idx: status = "🟢 ATTIVA"
-            if i in bl: status = "🔴 BLACKLIST"
+            status = self.tr("In Attesa")
+            if i == curr_idx: status = self.tr("🟢 ATTIVA")
+            if i in bl: status = self.tr("🔴 BLACKLIST")
             
             calls = counts.get(i, 0)
 
@@ -1310,7 +1556,7 @@ class AlumenGUI:
         AlumenCore.add_api_key(k)
         self.ent_new_api.delete(0, tk.END)
         self._refresh_api_list()
-        messagebox.showinfo("Info", "API Key aggiunta.")
+        messagebox.showinfo(self.tr("Info"), self.tr("API Key aggiunta."))
 
     def _api_remove(self):
         sel = self.tree_api.selection()
@@ -1340,7 +1586,7 @@ class AlumenGUI:
     def _api_reset(self):
         AlumenCore.clear_blacklisted_keys()
         self._refresh_api_list()
-        messagebox.showinfo("Info", "Blacklist resettata.")
+        messagebox.showinfo(self.tr("Info"), self.tr("Blacklist resettata."))
     # ----------------------------
 
     def _run_dry_run_tool(self):
@@ -1358,7 +1604,7 @@ class AlumenGUI:
     def _run_extractor_tool(self):
         s = self.ent_ex_src.get()
         t = self.ent_ex_tgt.get()
-        if not s or not t: messagebox.showerror("Errore", "Seleziona cartelle!"); return
+        if not s or not t: messagebox.showerror(self.tr("Errore"), self.tr("Seleziona cartelle!")); return
         
         fmt = self.cmb_ex_fmt.get()
         try: col_s = int(self.ent_ex_col_src.get_valid_value())
@@ -1368,18 +1614,18 @@ class AlumenGUI:
         json_keys = self.ent_ex_json_keys.get_valid_value()
 
         self._show_frame("log")
-        self.status_var.set("Estrazione cache in corso...")
+        self.status_var.set(self.tr("Estrazione cache in corso..."))
         threading.Thread(target=lambda: AlumenCore.run_cache_extractor(s, t, fmt, col_s, col_t, "utf-8", json_keys=json_keys), daemon=True).start()
     def _run_scanner_tool(self):
         inp = self.ent_input.get()
         api = self.ent_api.get()
-        if not api and not self.api_file_path: messagebox.showerror("Errore", "API Key necessaria"); return
+        if not api and not self.api_file_path: messagebox.showerror(self.tr("Errore"), self.tr("API Key necessaria")); return
         fmt = self.cmb_scan_fmt.get()
-        self.status_var.set("Scansione termini in corso...")
+        self.status_var.set(self.tr("Scansione termini in corso..."))
         def _w():
             t = AlumenCore.run_term_scanner(inp, fmt, "utf-8")
-            self.log_queue.put(f"Termini trovati (formato {fmt}):\n{t}")
-            self.status_var.set("Scansione completata")
+            self.log_queue.put(f"{self.tr('Termini trovati (formato ')}{fmt}):\n{t}")
+            self.status_var.set(self.tr("Scansione completata"))
         self._show_frame("log")
         threading.Thread(target=_w, daemon=True).start()
 
@@ -1394,8 +1640,8 @@ class AlumenGUI:
         a.ollama_model = self.cmb_ollama_model.get() if a.use_ollama else None
         a.model_name = self.cmb_model.get()
 
-        if not a.use_ollama and not a.api and not a.api_file: messagebox.showerror("Errore", "Manca API Key!"); return
-        if a.use_ollama and not a.ollama_model: messagebox.showerror("Errore", "Seleziona un modello Ollama!"); return
+        if not a.use_ollama and not a.api and not a.api_file: messagebox.showerror(self.tr("Errore"), self.tr("Manca API Key!")); return
+        if a.use_ollama and not a.ollama_model: messagebox.showerror(self.tr("Errore"), self.tr("Seleziona un modello Ollama!")); return
 
         a.input = self.ent_input.get() # Fix: Aggiunto attributo input
         a.output_dir = self.ent_output.get()
@@ -1455,7 +1701,7 @@ class AlumenGUI:
         a.xlsx_target_col = self.ent_xlsx_tgt.get_valid_value() if hasattr(self, 'ent_xlsx_tgt') else "B"
 
         if a.file_type == "json" and not a.json_keys and not a.dry_run:
-            messagebox.showerror("Errore", "JSON richiede chiavi!")
+            messagebox.showerror(self.tr("Errore"), self.tr("JSON richiede chiavi!"))
             return
 
         self.current_args = a
@@ -1463,16 +1709,16 @@ class AlumenGUI:
         self.pause_event.set() 
         self.skip_event.clear()
         self.is_running = True
-        self.btn_pause.config(state='normal', text="⏸ PAUSA", style='Warn.TButton')
+        self.btn_pause.config(state='normal', text=self.tr("⏸ PAUSA"), style='Warn.TButton')
         self.btn_skip.config(state='normal')
         self.txt_log.configure(state='normal')
         self.txt_log.delete(1.0, tk.END)
         self.txt_log.configure(state='disabled')
         self._show_frame("log")
-        self.status_var.set("Avvio traduzione...")
+        self.status_var.set(self.tr("Avvio traduzione..."))
         
         # Avviso di avvio
-        messagebox.showinfo("Processo Avviato", "La traduzione è iniziata. Puoi monitorare l'avanzamento nella scheda 'Esecuzione'.")
+        messagebox.showinfo(self.tr("Processo Avviato"), self.tr("La traduzione è iniziata. Puoi monitorare l'avanzamento nella scheda 'Esecuzione'."))
         
         # Funzione wrapper per il thread che include la callback finale
         def thread_wrapper():
@@ -1486,8 +1732,8 @@ class AlumenGUI:
         """Callback eseguita nel thread principale alla fine del processo."""
         AlumenCore.final_elapsed_time = AlumenCore.get_elapsed_time()
         self.is_running = False
-        self.status_var.set("Pronto")
-        messagebox.showinfo("Processo Terminato", "Il lavoro è stato completato.")
+        self.status_var.set(self.tr("Pronto"))
+        messagebox.showinfo(self.tr("Processo Terminato"), self.tr("Il lavoro è stato completato."))
 
     def _collect_args(self):
         class Args: pass
@@ -1510,7 +1756,7 @@ class AlumenGUI:
         args = self._collect_args()
         preview_text = AlumenCore.generate_prompt_preview(args)
         top = tk.Toplevel(self.root)
-        top.title("Prompt Preview")
+        top.title(self.tr("Prompt Preview"))
         top.geometry("800x650")
         top.configure(bg=C_MAIN_BG)
         st = scrolledtext.ScrolledText(top, bg="#0D0D0D", fg="#2ecc71", font=F_MONO, padx=15, pady=15)
