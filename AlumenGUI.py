@@ -626,7 +626,7 @@ class AlumenGUI:
         f_m_in = tk.Frame(f_m, bg=C_CARD_BG)
         f_m_in.pack(fill="x", pady=(5,0))
         self.cmb_model = ttk.Combobox(f_m_in, state="readonly")
-        self.cmb_model['values'] = ("gemini-2.0-flash [Default]",)
+        self.cmb_model['values'] = (f"{AlumenCore.DEFAULT_MODEL_NAME} [Default]",)
         self.cmb_model.current(0)
         self.cmb_model.pack(side="left", fill="x", expand=True)
         ToolTip(self.cmb_model, self.tr("Seleziona il modello AI da utilizzare."))

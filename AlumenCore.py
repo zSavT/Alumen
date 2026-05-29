@@ -1,4 +1,5 @@
 import time
+import difflib
 import socket
 import google.generativeai as genai
 import google.api_core.exceptions
@@ -55,31 +56,26 @@ CACHE_FILE_NAME = "alumen_cache.json"
 DEFAULT_CACHE_FILE = CACHE_FILE_NAME # Alias per compatibilità GUI
 BASE_API_CALL_INTERVAL_SECONDS = 0.2
 FILE_CONTEXT_SAMPLE_SIZE = 15
-CURRENT_SCRIPT_VERSION = "2.6.2"
+CURRENT_SCRIPT_VERSION = "2.7"
 GITHUB_REPO = "zSavT/Alumen"
 ESTIMATED_CHARS_PER_TOKEN = 3.5
 
 # Prezzi indicativi per 1 Milione di Token (Input / Output) - Aggiornati a listino standard
 PRICING_TABLE = {
-    "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
-    "gemini-1.5-flash-8b": {"input": 0.0375, "output": 0.15},
-    "gemini-1.5-pro":   {"input": 1.25,  "output": 5.00},
-    "gemini-1.0-pro":   {"input": 0.50,  "output": 1.50},
-    "gemini-2.0-flash": {"input": 0.10,  "output": 0.40},
-    "gemini-2.0-flash-lite": {"input": 0.075, "output": 0.30},
-    "gemini-2.0-pro":   {"input": 1.25,  "output": 5.00},
     
     # Linea 2.5
     "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
     "gemini-2.5-flash": {"input": 0.30,  "output": 2.50},
     "gemini-2.5-pro":   {"input": 1.25,  "output": 10.00},
     
-    # Linea 3.0 e 3.1
-    "gemini-3.0-flash": {"input": 0.50,  "output": 3.00},
-    "gemini-3.0-pro":   {"input": 2.00,  "output": 12.00},
+    # Linea 3.1
     "gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50},
-    "gemini-3.1-flash": {"input": 0.50,  "output": 3.00}, # Stima base (come 3.0 Flash)
+    "gemini-3.1-flash": {"input": 0.50,  "output": 3.00},
     "gemini-3.1-pro":   {"input": 2.00,  "output": 12.00},
+    
+    # Linea 3.5
+    "gemini-3.5-flash": {"input": 1.50,  "output": 9.00},
+    "gemini-3.5-pro":   {"input": 2.00,  "output": 12.00},
 }
 
 # ----- Variabili Globali -----
@@ -90,6 +86,7 @@ model = None
 script_args = None
 log_file_path = None
 translation_cache = {}
+fuzzy_lookup_cache = {}
 BLACKLIST_TERMS = set(["Dummy", "dummy"])
 glossary_terms = {}  # Dizionario per il glossario
 style_guide_content = "" # Contenuto della guida di stile
@@ -176,9 +173,14 @@ def check_signals():
             command_lock.release()
 
 def retry_if_flag_is_not_set(retry_state):
-    is_transient_error = isinstance(retry_state.outcome.exception(), TRANSIENT_API_EXCEPTIONS)
-    should_retry = is_transient_error and not script_args.rotate_on_limit_or_error
+    exc = retry_state.outcome.exception()
+    if script_args and getattr(script_args, 'ollama_model', None):
+        if isinstance(exc, (requests.exceptions.RequestException, ConnectionError)):
+            return True
+    is_transient_error = isinstance(exc, TRANSIENT_API_EXCEPTIONS)
+    should_retry = is_transient_error and not (script_args and getattr(script_args, 'rotate_on_limit_or_error', False))
     return should_retry
+
 
 
 def log_before_retry(retry_state):
@@ -297,6 +299,8 @@ def get_script_args_updated():
                                    help="L'output conterrà solo i testi tradotti, uno per riga.")
     translation_group.add_argument("--rpm", type=int, default=None,
                                    help="Numero massimo di richieste API a Gemini per minuto.")
+    translation_group.add_argument("--batch-size", type=int, default=10,
+                                   help="Dimensione massima del lotto (batch size) per la traduzione raggruppata. Default: 10.")
     translation_group.add_argument("--enable-file-context", action="store_true",
                                    help="Abilita l'analisi di un campione del file per generare un contesto generale da usare in tutte le traduzioni del file.")
     translation_group.add_argument("--full-context-sample", action="store_true",
@@ -330,6 +334,8 @@ def get_script_args_updated():
                                help="Modalità server: non blacklista mai le API key per errori o limiti giornalieri, ma riprova all'infinito sulla stessa chiave.")
     utility_group.add_argument("--shutdown", action="store_true",
                                help="Spegne il computer al termine dell'esecuzione (se non interrotta manualmente).")
+    utility_group.add_argument("--max-entries", type=int, default=None,
+                               help="Limite massimo di entry per file. I file con più entry verranno saltati.")
     ollama_group.add_argument("--ollama-model", type=str, default=None,
                               help="[SPERIMENTALE] Specifica un modello Ollama da usare al posto di Gemini. Disabilita le API key e le relative opzioni.")
     ollama_group.add_argument("--ollama-url", type=str, default="http://localhost:11434",
@@ -341,6 +347,8 @@ def get_script_args_updated():
         parsed_args.newline_char = '\n'
     elif parsed_args.newline_char == '\\r\\n':
         parsed_args.newline_char = '\r\n'
+    if hasattr(parsed_args, 'batch_size'):
+        parsed_args.batch_size = max(1, min(parsed_args.batch_size, 15))
     script_args = parsed_args
     return parsed_args
 
@@ -680,10 +688,56 @@ def blacklist_current_api_key(is_telegram: bool = False):
 
 
 def blacklist_specific_api_key(index_str, is_telegram: bool = False):
-    # Questa funzione non era stata implementata, la aggiungo per completezza
-    # e per gestire il comando 'blacklist <indice>'
-    console.print(
-        f"[yellow]⚠️  Funzione 'blacklist <indice>' non ancora implementata. Usa 'exhausted' per la chiave corrente.[/]")
+    global current_api_key_index, blacklisted_api_key_indices, available_api_keys
+    try:
+        index = int(index_str)
+        if not (0 <= index < len(available_api_keys)):
+            msg = f"🛑 ERRORE: Indice {index} fuori range."
+            if is_telegram: return msg
+            console.print(f"[red]{msg}[/]")
+            return msg
+        if index in blacklisted_api_key_indices:
+            msg = f"ℹ️ La chiave ...{available_api_keys[index][-4:]} è già in blacklist."
+            if is_telegram: return msg
+            console.print(f"[yellow]{msg}[/]")
+            return msg
+        blacklisted_api_key_indices.add(index)
+        key_suffix = available_api_keys[index][-4:]
+        msg = f"✅ Chiave ...{key_suffix} all'indice {index} aggiunta alla blacklist."
+        write_to_log(f"BLACKLIST: {msg}")
+        if index == current_api_key_index:
+            rotate_api_key(triggered_by_user=True, reason_override="Forzato da blacklist")
+        if is_telegram: return msg
+        console.print(f"[green]{msg}[/]")
+        return msg
+    except ValueError:
+        msg = "🛑 ERRORE: L'indice deve essere un numero intero."
+        if is_telegram: return msg
+        console.print(f"[red]{msg}[/]")
+        return msg
+
+
+def set_max_entries_limit(limit_str, is_telegram: bool = False):
+    global max_entries_limit
+    try:
+        new_limit = int(limit_str)
+        if new_limit < 0:
+            msg = "🛑 ERRORE: Il limite max_entries non può essere negativo."
+        elif new_limit == 0:
+            max_entries_limit = 999999999999
+            msg = "✅ Limite max_entries disabilitato."
+        else:
+            max_entries_limit = new_limit
+            msg = f"✅ Nuovo limite max_entries impostato a {new_limit}."
+        write_to_log(f"COMANDO: {msg.strip()}")
+        if is_telegram: return msg
+        console.print(f"[green]{msg}[/]")
+        return msg
+    except ValueError:
+        msg = "🛑 ERRORE: Il limite max_entries deve essere un numero intero."
+        if is_telegram: return msg
+        console.print(f"[red]{msg}[/]")
+        return msg
 
 
 def clear_blacklisted_keys(is_telegram: bool = False):
@@ -1221,7 +1275,32 @@ def determine_if_translatable(text_value):
         return False
     if '_' in text_value_stripped and ' ' not in text_value_stripped:
         return False
+    # Filtra variabili isolate es. {name}, {player.name}, <br>, [p] o variabili di formato (%s, %d)
+    if re.match(r'^\{[\w\.]+\}$', text_value_stripped) or re.match(r'^<[\w\s="/]+>$', text_value_stripped):
+        return False
+    if re.match(r'^\[[\w\.]+\]$', text_value_stripped) or re.match(r'^%[a-zA-Z]$', text_value_stripped):
+        return False
     return True
+
+
+def rebuild_fuzzy_lookup_cache():
+    global translation_cache, fuzzy_lookup_cache
+    fuzzy_lookup_cache.clear()
+    
+    # Rimuovi vecchie chiavi "FUZZY::" migrate o residue in translation_cache
+    for k in list(translation_cache.keys()):
+        if k.startswith("FUZZY::"):
+            del translation_cache[k]
+            
+    # Ricostruisci il dizionario fuzzy in memoria
+    for key_str, val in translation_cache.items():
+        try:
+            key_data = json.loads(key_str)
+            if isinstance(key_data, list) and len(key_data) > 0:
+                orig_text = key_data[0]
+                fuzzy_lookup_cache[orig_text.strip().lower()] = val
+        except:
+            pass
 
 
 def load_persistent_cache(silent: bool = False):
@@ -1235,6 +1314,7 @@ def load_persistent_cache(silent: bool = False):
         if os.path.exists(cache_file):
             with open(cache_file, 'r', encoding='utf-8') as f:
                 translation_cache = json.load(f)
+            rebuild_fuzzy_lookup_cache()
             if not silent:
                 console.print(
                     f"✅ Cache persistente caricata da '[green]{cache_file}[/]' ({len(translation_cache)} voci).")
@@ -1291,13 +1371,16 @@ def check_and_save_cache(args=None, force=False):
     retry=retry_if_flag_is_not_set,
     before_sleep=log_before_retry
 )
-def _perform_genai_api_call(prompt):
+def _perform_genai_api_call(prompt, generation_config=None):
     if script_args.ollama_model:
         return _call_ollama_model(prompt)
 
     wait_for_rpm_limit()
     time.sleep(BASE_API_CALL_INTERVAL_SECONDS)
-    response_obj = model.generate_content(prompt)
+    if generation_config:
+        response_obj = model.generate_content(prompt, generation_config=generation_config)
+    else:
+        response_obj = model.generate_content(prompt)
 
     if hasattr(response_obj, 'usage_metadata'):
         global total_input_tokens, total_output_tokens
@@ -1452,16 +1535,30 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
     
     # 4. Fuzzy Match (Sperimentale)
     if args.fuzzy_match:
-        fuzzy_key = "FUZZY::" + text_to_translate.strip().lower()
-        if fuzzy_key in translation_cache:
+        clean_text = text_to_translate.strip().lower()
+        matched_val = None
+        title_type = "Fuzzy (Case)"
+        
+        # Cerca match esatto (case-insensitive) nel lookup in memoria
+        if clean_text in fuzzy_lookup_cache:
+            matched_val = fuzzy_lookup_cache[clean_text]
+        else:
+            # Cerca vero match di testo simile usando difflib (similarità >= 90%)
+            choices = list(fuzzy_lookup_cache.keys())
+            close_matches = difflib.get_close_matches(clean_text, choices, n=1, cutoff=0.9)
+            if close_matches:
+                matched_val = fuzzy_lookup_cache[close_matches[0]]
+                ratio_val = int(difflib.SequenceMatcher(None, clean_text, close_matches[0]).ratio() * 100)
+                title_type = f"Fuzzy ({ratio_val}%)"
+        
+        if matched_val:
             cache_hit_count += 1
-            translated_text = translation_cache[fuzzy_key]
             content = Text.from_markup(
-                f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {translated_text}")
+                f"    [dim]└─ Orig:[/] {text_to_translate}\n    [dim]└─ Trad:[/] {matched_val}")
             console.print(
-                Panel(content, title=f"[bold green]💾 CACHE (Fuzzy)[/] | {context_for_log}", border_style="green",
+                Panel(content, title=f"[bold green]💾 CACHE ({title_type})[/] | {context_for_log}", border_style="green",
                       title_align="left"))
-            return translated_text
+            return matched_val
 
     # Se siamo qui, è un vero CACHE MISS. La traduzione avverrà più avanti.
 
@@ -1564,9 +1661,8 @@ def get_translation_from_api(text_to_translate, context_for_log, args, dynamic_c
 
             # Salvataggio in cache
             translation_cache[context_key] = translated_text
-            if args.fuzzy_match:
-                fuzzy_key = "FUZZY::" + text_to_translate.strip().lower()
-                translation_cache[fuzzy_key] = translated_text
+            # Aggiorna il fuzzy cache in memoria per ricerche future immediate
+            fuzzy_lookup_cache[text_to_translate.strip().lower()] = translated_text
                 
             write_to_log(f"CACHE MISS: Nuova traduzione salvata in cache per: {context_for_log}")
             return translated_text
@@ -1675,6 +1771,300 @@ def is_text_in_cache(text, args):
     key = json.dumps(key_tuple, ensure_ascii=False)
     return key in translation_cache
 
+
+def _translate_sequential_fallback(misses, context_for_log, args):
+    fallback_results = []
+    for m in misses:
+        res = get_translation_from_api(m["text"], context_for_log, args, dynamic_context=m["item_dynamic_context"])
+        fallback_results.append(res)
+    return fallback_results
+
+
+def get_translations_batch(batch_items, context_for_log, args, dynamic_context=None):
+    global major_failure_count, user_command_skip_api, model, translation_cache, cache_hit_count, api_call_counts, BLACKLIST_TERMS, last_translation_prompt, glossary_terms, fuzzy_lookup_cache
+
+    results = [None] * len(batch_items)
+    miss_indices = []
+    misses = []
+
+    for idx, item in enumerate(batch_items):
+        text = item["text"]
+        item_context = item.get("context")
+
+        if text.strip() in BLACKLIST_TERMS:
+            results[idx] = text
+            continue
+        
+        if not determine_if_translatable(text):
+            results[idx] = text
+            content = Text.from_markup(f"    [dim]└─ Orig:[/] {text}\n    [dim]└─ Trad:[/] {text}")
+            console.print(Panel(content, title=f"[bold yellow]⏭️  SKIP (Non-Translatable)[/] | {context_for_log}", border_style="yellow", title_align="left"))
+            write_to_log(f"SKIP (Non-Translatable): {text}. Contesto: {context_for_log}")
+            continue
+
+        # Costruisci il contesto dinamico specifico per questo elemento
+        context_parts = []
+        if current_file_context:
+            context_parts.append(f"Contesto generale del file: '{current_file_context}'")
+        if item_context:
+            context_parts.append(f"Contesto specifico di questa entry: '{item_context}'")
+        if args.context_window > 0 and dynamic_context:
+            context_parts.append(dynamic_context)
+
+        item_dynamic_context = "\n".join(context_parts) if context_parts else None
+
+        context_key_tuple = (text, args.source_lang, args.target_lang, args.game_name, args.prompt_context, item_dynamic_context)
+        context_key = json.dumps(context_key_tuple, ensure_ascii=False)
+
+        # 1. Match esatto in cache
+        if context_key in translation_cache:
+            cache_hit_count += 1
+            results[idx] = translation_cache[context_key]
+            content = Text.from_markup(f"    [dim]└─ Orig:[/] {text}\n    [dim]└─ Trad:[/] {results[idx]}")
+            console.print(Panel(content, title=f"[bold green]💾 CACHE (Contesto)[/] | {context_for_log}", border_style="green", title_align="left"))
+            continue
+
+        # 2. Promozione chiave generica
+        if item_dynamic_context:
+            generic_key_tuple = (text, args.source_lang, args.target_lang, args.game_name, args.prompt_context)
+            generic_key = json.dumps(generic_key_tuple, ensure_ascii=False)
+            if generic_key in translation_cache:
+                cache_hit_count += 1
+                results[idx] = translation_cache[generic_key]
+                translation_cache[context_key] = results[idx]
+                write_to_log(f"CACHE HIT (Generico): Promossa traduzione per {context_for_log}")
+                content = Text.from_markup(f"    [dim]└─ Orig:[/] {text}\n    [dim]└─ Trad:[/] {results[idx]}")
+                console.print(Panel(content, title=f"[bold green]💾 CACHE (Generico)[/] | {context_for_log}", border_style="green", title_align="left"))
+                continue
+
+        # 3. Fuzzy Match
+        if args.fuzzy_match:
+            clean_text = text.strip().lower()
+            matched_val = None
+            title_type = "Fuzzy (Case)"
+            
+            if clean_text in fuzzy_lookup_cache:
+                matched_val = fuzzy_lookup_cache[clean_text]
+            else:
+                choices = list(fuzzy_lookup_cache.keys())
+                close_matches = difflib.get_close_matches(clean_text, choices, n=1, cutoff=0.9)
+                if close_matches:
+                    matched_val = fuzzy_lookup_cache[close_matches[0]]
+                    ratio_val = int(difflib.SequenceMatcher(None, clean_text, close_matches[0]).ratio() * 100)
+                    title_type = f"Fuzzy ({ratio_val}%)"
+            
+            if matched_val:
+                cache_hit_count += 1
+                results[idx] = matched_val
+                translation_cache[context_key] = matched_val
+                content = Text.from_markup(f"    [dim]└─ Orig:[/] {text}\n    [dim]└─ Trad:[/] {matched_val}")
+                console.print(Panel(content, title=f"[bold green]💾 CACHE ({title_type})[/] | {context_for_log}", border_style="green", title_align="left"))
+                continue
+
+        miss_indices.append(idx)
+        misses.append({"text": text, "context": item_context, "item_dynamic_context": item_dynamic_context})
+
+    if not misses:
+        return results
+
+    # Se stiamo usando Ollama o se c'è un solo miss, fallback sequenziale
+    if args.ollama_model or len(misses) == 1:
+        fallback_results = _translate_sequential_fallback(misses, context_for_log, args)
+        for m_idx, res in zip(miss_indices, fallback_results):
+            results[m_idx] = res
+        return results
+
+    # Altrimenti, eseguiamo la chiamata batch con JSON output strutturato
+    input_items = []
+    for m in misses:
+        item_dict = {"text": m["text"]}
+        if m["context"]:
+            item_dict["context"] = m["context"]
+        input_items.append(item_dict)
+
+    input_json_str = json.dumps({"inputs": input_items}, ensure_ascii=False, indent=2)
+
+    prompt_lines = [
+        f"Il tuo compito è tradurre una lista di testi ESCLUSIVAMENTE da {args.source_lang} a {args.target_lang}.",
+        f"ISTRUZIONE CRITICA: Se il 'text' fornito NON è in {args.source_lang}, DEVI restituire il testo originale identico, senza alcuna traduzione o modifica.",
+        f"Per ogni testo che è in {args.source_lang}, traducilo tenendo conto dell'eventuale contesto ('context') fornito e del contesto generale del gioco '{args.game_name}'.",
+        "ISTRUZIONE CRITICA 2: Preserva sempre esattamente tutti gli a capo originali (come `\\n` o `\\r\\n`) presenti nei testi.",
+        "Inoltre, preserva tag HTML, placeholder (come [p], {{player_name}}) o codici speciali.",
+        f"Assicurati di mantenere identici i seguenti termini che NON devono essere tradotti: {', '.join(BLACKLIST_TERMS)}.",
+        "In caso di dubbi sul genere (Femminile o Maschile), utilizza il maschile.",
+    ]
+
+    if glossary_terms:
+        prompt_lines.append("\n--- GLOSSARIO OBBLIGATORIO ---")
+        prompt_lines.append("Usa tassativamente le seguenti traduzioni per i termini specificati:")
+        prompt_lines.append(json.dumps(glossary_terms, ensure_ascii=False, indent=2))
+        prompt_lines.append("--- FINE GLOSSARIO ---\n")
+
+    if style_guide_content:
+        prompt_lines.append("\n--- GUIDA DI STILE ---")
+        prompt_lines.append(style_guide_content)
+        prompt_lines.append("--- FINE GUIDA DI STILE ---\n")
+
+    if args.prompt_context:
+        prompt_lines.append(f"\nIstruzione aggiuntiva: {args.prompt_context}.")
+
+    prompt_lines.extend([
+        "L'output DEVE essere in formato JSON valido che rispetta esattamente questa struttura:",
+        '{ "translations": ["traduzione1", "traduzione2", ...] }',
+        f"La lista 'translations' deve contenere ESATTAMENTE lo stesso numero di elementi ({len(misses)}) della lista 'inputs' in input, nello stesso ordine.",
+        "Non includere commenti o spiegazioni al di fuori del JSON."
+    ])
+
+    prompt_text = "\n".join(prompt_lines) + f"\n\nLista di input in JSON:\n{input_json_str}\n\nRispondi con l'output JSON:"
+
+    while True:
+        if args.interactive: check_and_wait_if_paused(context_for_log)
+
+        if command_lock.acquire(blocking=False):
+            try:
+                if user_command_skip_file:
+                    console.print("    [yellow]➡️  Comando 'skip file' rilevato. Interruzione del batch corrente...[/]")
+                    for m_idx, m in zip(miss_indices, misses):
+                        results[m_idx] = m["text"]
+                    return results
+
+                if user_command_skip_api:
+                    rotate_api_key(triggered_by_user=True)
+                    user_command_skip_api = False
+            finally:
+                command_lock.release()
+
+        try:
+            last_translation_prompt = prompt_text
+            json_response = _perform_genai_api_call(prompt_text, generation_config={"response_mime_type": "application/json"})
+            
+            if not args.ollama_model:
+                api_call_counts[current_api_key_index] += 1
+            
+            parsed = json.loads(json_response)
+            translations_list = parsed.get("translations", [])
+
+            if not isinstance(translations_list, list) or len(translations_list) != len(misses):
+                console.print(f"    ⚠️  Risposta batch non valida (lunghezza {len(translations_list)} invece di {len(misses)}). Fallback sequenziale...", style="yellow")
+                write_to_log(f"BATCH MISMATCH: Ricevuti {len(translations_list)} elementi invece di {len(misses)}. Eseguo fallback.")
+                fallback_results = _translate_sequential_fallback(misses, context_for_log, args)
+                for m_idx, res in zip(miss_indices, fallback_results):
+                    results[m_idx] = res
+                return results
+
+            # Critica e revisione (Reflection) se attiva
+            if args.reflect:
+                for idx_miss, m in enumerate(misses):
+                    orig = m["text"]
+                    trans = translations_list[idx_miss]
+                    reflection_prompt = (
+                        f"Agisci come un revisore esperto. Analizza la seguente traduzione da {args.source_lang} a {args.target_lang}.\n"
+                        f"Originale: {orig}\n"
+                        f"Traduzione proposta: {trans}\n"
+                        f"Contesto: {args.game_name}\n"
+                        "Identifica eventuali errori grammaticali, di tono o incongruenze con il glossario. "
+                        "Verifica che il genere sia coerente e che i termini tecnici siano rispettati. "
+                        "Se la traduzione è perfetta, restituiscila invariata. Altrimenti, fornisci SOLO la versione corretta."
+                    )
+                    corrected_text = _perform_genai_api_call(reflection_prompt)
+                    if not args.ollama_model:
+                        api_call_counts[current_api_key_index] += 1
+                    translations_list[idx_miss] = corrected_text
+
+            for idx_miss, m in enumerate(misses):
+                orig = m["text"]
+                trans = translations_list[idx_miss]
+                if args.wrap_at and args.wrap_at > 0:
+                    trans = textwrap.fill(trans, width=args.wrap_at, newline=args.newline_char, replace_whitespace=False)
+                
+                m_idx = miss_indices[idx_miss]
+                results[m_idx] = trans
+
+                # Salva in cache
+                context_key_tuple = (orig, args.source_lang, args.target_lang, args.game_name, args.prompt_context, m["item_dynamic_context"])
+                context_key = json.dumps(context_key_tuple, ensure_ascii=False)
+                translation_cache[context_key] = trans
+                fuzzy_lookup_cache[orig.strip().lower()] = trans
+
+                content = Text.from_markup(f"    [dim]└─ Orig:[/] {orig}\n    [dim]└─ Trad:[/] {trans}")
+                active_key_short = available_api_keys[current_api_key_index][-4:]
+                console.print(Panel(content, title=f"API ...{active_key_short} (Batch) | {context_for_log}", border_style="blue", title_align="left"))
+                write_to_log(f"BATCH HIT (MISS RESOLVED): Salvata traduzione in cache per {orig}")
+
+            major_failure_count = 0
+            return results
+
+        except json.JSONDecodeError as e:
+            console.print("    ⚠️  Risposta batch non in formato JSON valido. Fallback sequenziale...", style="yellow")
+            write_to_log(f"BATCH JSON ERROR: Errore parsing JSON: {e}. Eseguo fallback.")
+            fallback_results = _translate_sequential_fallback(misses, context_for_log, args)
+            for m_idx, res in zip(miss_indices, fallback_results):
+                results[m_idx] = res
+            return results
+
+        except google.api_core.exceptions.PermissionDenied as e:
+            active_key_short = available_api_keys[current_api_key_index][-4:]
+            if args.server:
+                console.print(f"    ⚠️  [SERVER MODE] Chiave API ...{active_key_short} non valida. Attendo 60 secondi e riprovo...", style="yellow")
+                write_to_log(f"SERVER MODE: Permission Denied su Key ...{active_key_short}. Attendo 60s. Errore: {e}")
+                time.sleep(60)
+                continue
+            else:
+                console.print(f"    🛑 Chiave API ...{active_key_short} non valida o disabilitata. Verrà messa in blacklist.", style="red")
+                write_to_log(f"ERRORE PERMESSO: {context_for_log}, Key ...{active_key_short}. Errore: {e}")
+                if blacklist_current_api_key():
+                    continue
+                else:
+                    log_critical_error_and_exit(f"Nessuna API key valida disponibile dopo un errore di 'Permission Denied' sulla chiave ...{active_key_short}.")
+                    for m_idx, m in zip(miss_indices, misses):
+                        results[m_idx] = m["text"]
+                    return results
+
+        except TRANSIENT_API_EXCEPTIONS as e:
+            error_message = str(e).lower()
+            active_key_short = available_api_keys[current_api_key_index][-4:]
+
+            if isinstance(e, google.api_core.exceptions.ResourceExhausted) and ("day" in error_message or "daily" in error_message):
+                if args.server:
+                    console.print(f"    ⚠️  [SERVER MODE] Limite quota GIORNALIERA raggiunto per ...{active_key_short}. Attendo 60 secondi e riprovo...", style="yellow")
+                    write_to_log(f"SERVER MODE: Limite quota GIORNALIERA su Key ...{active_key_short}. Attendo 60s. Errore: {e}")
+                    time.sleep(60)
+                    continue
+                else:
+                    console.print(f"    🛑 Limite quota GIORNALIERA raggiunto per la chiave API ...{active_key_short}. Verrà messa in blacklist.", style="red")
+                    write_to_log(f"ERRORE QUOTA GIORNALIERA: {context_for_log}, Key ...{active_key_short}. Errore: {e}")
+                    if blacklist_current_api_key():
+                        continue
+                    else:
+                        log_critical_error_and_exit(f"Nessuna API key valida disponibile dopo aver raggiunto il limite di quota giornaliera per la chiave ...{active_key_short}.")
+                        for m_idx, m in zip(miss_indices, misses):
+                            results[m_idx] = m["text"]
+                        return results
+            else:
+                major_failure_count += 1
+                console.print(f"    ❌ Fallimento API durante la traduzione batch. Chiave ...{active_key_short}. Consecutivi: {major_failure_count}/{MAX_MAJOR_FAILURES_THRESHOLD}", style="red")
+                write_to_log(f"ERRORE API BATCH: {context_for_log}, Key ...{active_key_short}. Errore: {e}")
+                
+                if args.rotate_on_limit_or_error and rotate_api_key(reason_override="Errore API"):
+                    continue
+                elif major_failure_count >= MAX_MAJOR_FAILURES_THRESHOLD and rotate_api_key():
+                    continue
+                else:
+                    console.print("    ⚠️  Rotazione API non attiva o fallita. Fallback sequenziale...", style="yellow")
+                    fallback_results = _translate_sequential_fallback(misses, context_for_log, args)
+                    for m_idx, res in zip(miss_indices, fallback_results):
+                        results[m_idx] = res
+                    return results
+
+        except Exception as e:
+            console.print(f"    🛑 Errore imprevisto durante la traduzione batch: {e}", style="red")
+            write_to_log(f"ERRORE IMPREVISTO BATCH: Errore: {e}")
+            fallback_results = _translate_sequential_fallback(misses, context_for_log, args)
+            for m_idx, res in zip(miss_indices, fallback_results):
+                results[m_idx] = res
+            return results
+
+
 # --- FUNZIONI DI TRADUZIONE PER FORMATO ---
 
 def traduci_testo_po(input_file, output_file, args):
@@ -1750,87 +2140,81 @@ def traduci_testo_po(input_file, output_file, args):
         ) as progress:
             task = progress.add_task(f"[cyan]PO '{os.path.basename(input_file)}'[/]", total=current_file_total_entries)
 
-            for entry in po_file:
-                # --- MODIFICA: Controllo segnali (Stop/Skip) ---
+            batch_size = max(1, min(getattr(args, 'batch_size', 10), 15))
+            for chunk_start in range(0, len(entries_to_process), batch_size):
+                chunk = entries_to_process[chunk_start : chunk_start + batch_size]
+                
                 try:
                     check_signals()
                 except SkipFileException:
                     console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
-                    return # Esce dalla funzione, passando al prossimo file
+                    return
                 except StopProcessingException:
-                    raise # Rilancia per fermare tutto
-                # -----------------------------------------------
+                    raise
 
-                translated_this_entry = False
-                original_context = entry.msgctxt
-                context_for_prompt, context_is_translatable_prose = None, should_translate_msgctxt(original_context)
-
-                context_log = f"PO '{file_basename}' | Riga {entry.linenum} (ctx)"
-                msgid_log = f"PO '{file_basename}' | Riga {entry.linenum} (msgid)"
-
-                if context_is_translatable_prose:
-                    progress.update(task,
-                                    description=f"[cyan]PO '{os.path.basename(input_file)}'[/] | Riga {entry.linenum} (ctx)")
+                # Pass 1: Traduzione dei contesti in batch per questo chunk
+                contexts_to_translate = [(entry, entry.msgctxt) for entry in chunk if should_translate_msgctxt(entry.msgctxt)]
+                if contexts_to_translate:
+                    first_ln = contexts_to_translate[0][0].linenum
+                    last_ln = contexts_to_translate[-1][0].linenum
+                    ln_str = f"{first_ln}-{last_ln}" if len(contexts_to_translate) > 1 else str(first_ln)
+                    
+                    progress.update(task, description=f"[cyan]PO '{file_basename}'[/] | Righe {ln_str} (ctx)")
+                    context_log = f"PO '{file_basename}' | Righe {ln_str} (ctx)"
 
                     context_parts = []
                     if current_file_context:
                         context_parts.append(f"Contesto generale del file: '{current_file_context}'")
                     if args.context_window > 0 and dynamic_context_window:
-                        context_lines = [
-                            f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
+                        context_lines = [f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
                         for src, trans in dynamic_context_window:
                             context_lines.append(f'- "{src}" -> "{trans}"')
                         context_parts.append("\n".join(context_lines))
-                    final_dynamic_context = "\n".join(context_parts)
+                    final_dynamic_context = "\n".join(context_parts) if context_parts else None
 
-                    translated_context = get_translation_from_api(original_context, context_log, args,
-                                                                  dynamic_context=final_dynamic_context)
+                    batch_items = [{"text": orig_ctx} for entry, orig_ctx in contexts_to_translate]
+                    translated_contexts = get_translations_batch(batch_items, context_log, args, dynamic_context=final_dynamic_context)
+                    
+                    for (entry, orig_ctx), trans_ctx in zip(contexts_to_translate, translated_contexts):
+                        entry.msgctxt = trans_ctx
+                        if args.context_window > 0:
+                            dynamic_context_window.append((orig_ctx, trans_ctx))
+                        total_entries_translated += 1
 
-                    if args.context_window > 0:
-                        dynamic_context_window.append((original_context, translated_context))
-
-                    entry.msgctxt = translated_context
-                    context_for_prompt = translated_context
-                    total_entries_translated += 1
-                    translated_this_entry = True
-
-                elif original_context:
-                    context_for_prompt = original_context
-
-                if entry.msgid and determine_if_translatable(entry.msgid):
-                    progress.update(task,
-                                    description=f"[cyan]PO '{os.path.basename(input_file)}'[/] | Riga {entry.linenum} (msgid)")
+                # Pass 2: Traduzione dei msgid in batch per questo chunk
+                msgids_to_translate = [(entry, entry.msgid) for entry in chunk if entry.msgid and determine_if_translatable(entry.msgid)]
+                if msgids_to_translate:
+                    first_ln = msgids_to_translate[0][0].linenum
+                    last_ln = msgids_to_translate[-1][0].linenum
+                    ln_str = f"{first_ln}-{last_ln}" if len(msgids_to_translate) > 1 else str(first_ln)
+                    
+                    progress.update(task, description=f"[cyan]PO '{file_basename}'[/] | Righe {ln_str} (msgid)")
+                    context_log = f"PO '{file_basename}' | Righe {ln_str} (msgid)"
 
                     context_parts = []
                     if current_file_context:
                         context_parts.append(f"Contesto generale del file: '{current_file_context}'")
-                    if context_for_prompt:
-                        context_parts.append(f"Contesto specifico di questa entry: '{context_for_prompt}'")
-
                     if args.context_window > 0 and dynamic_context_window:
-                        context_lines = [
-                            f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
+                        context_lines = [f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
                         for src, trans in dynamic_context_window:
                             context_lines.append(f'- "{src}" -> "{trans}"')
                         context_parts.append("\n".join(context_lines))
+                    final_dynamic_context = "\n".join(context_parts) if context_parts else None
 
-                    final_dynamic_context = "\n".join(context_parts)
+                    batch_items = [{"text": orig_id, "context": entry.msgctxt if entry.msgctxt else None} for entry, orig_id in msgids_to_translate]
+                    translated_msgids = get_translations_batch(batch_items, context_log, args, dynamic_context=final_dynamic_context)
 
-                    original_msgid = entry.msgid
-                    translated_text = get_translation_from_api(original_msgid, msgid_log, args,
-                                                               dynamic_context=final_dynamic_context)
+                    for (entry, orig_id), trans_id in zip(msgids_to_translate, translated_msgids):
+                        entry.msgstr = trans_id
+                        if args.context_window > 0:
+                            dynamic_context_window.append((orig_id, trans_id))
+                        total_entries_translated += 1
 
-                    if args.context_window > 0:
-                        dynamic_context_window.append((original_msgid, translated_text))
-
-                    entry.msgstr = translated_text
-                    total_entries_translated += 1
-                    translated_this_entry = True
-
-                elif entry.msgid:
-                    entry.msgstr = entry.msgid
-
-                if translated_this_entry:
+                # Fallback per non traducibili e avanzamento progresso
+                for entry in chunk:
+                    if entry.msgid and not determine_if_translatable(entry.msgid):
+                        entry.msgstr = entry.msgid
+                    
                     current_file_processed_entries += 1
                     progress.advance(task)
 
@@ -1880,54 +2264,19 @@ def traduci_testo_json(input_file, output_file, args):
 
     dynamic_context_window = deque(maxlen=args.context_window)
 
-    progress = None
-    task = None
-
-    def _translate_recursive(obj, path="", context_window=None):
-        nonlocal progress, task
-        global total_entries_translated, current_file_processed_entries
+    def _collect_json_jobs(obj, path=""):
+        jobs = []
         if isinstance(obj, dict):
             for key, value in list(obj.items()):
-                # --- MODIFICA: Controllo segnali (Stop/Skip) ---
-                check_signals() # Solleva eccezioni gestite nel blocco try/except principale
-                # -----------------------------------------------
-
                 current_path = f"{path}.{key}" if path else key
-                is_match = (current_path in keys_to_translate) if args.match_full_json_path else (
-                            key in keys_to_translate)
+                is_match = (current_path in keys_to_translate) if args.match_full_json_path else (key in keys_to_translate)
                 if is_match and determine_if_translatable(value):
-                    progress.update(task,
-                                    description=f"[cyan]JSON '{file_basename}'[/] | Chiave: {current_path[:30]}...")
-                    original_value = value
-                    context_log = f"JSON '{file_basename}' | Chiave: '{current_path}'"
-
-                    context_parts = []
-                    if current_file_context:
-                        context_parts.append(f"Contesto generale del file: '{current_file_context}'")
-                    if args.context_window > 0 and context_window:
-                        context_lines = [f"Ecco le {len(context_window)} traduzioni più recenti. Usale per coerenza:"]
-                        for src, trans in context_window:
-                            context_lines.append(f'- "{src}" -> "{trans}"')
-                        context_parts.append("\n".join(context_lines))
-
-                    final_dynamic_context = "\n".join(context_parts)
-
-                    translated_value = get_translation_from_api(original_value, context_log, args,
-                                                                dynamic_context=final_dynamic_context)
-
-                    if args.context_window > 0 and context_window is not None:
-                        context_window.append((original_value, translated_value))
-
-                    obj[key] = translated_value
-                    if args.translation_only_output: translated_texts_for_only_output.append(translated_value)
-                    progress.advance(task)
-                    total_entries_translated += 1
-                    current_file_processed_entries += 1
-
-                _translate_recursive(value, current_path, context_window=context_window)
+                    jobs.append((obj, key, str(value), current_path))
+                jobs.extend(_collect_json_jobs(value, current_path))
         elif isinstance(obj, list):
             for i, item in enumerate(obj):
-                _translate_recursive(item, f"{path}[{i}]", context_window=context_window)
+                jobs.extend(_collect_json_jobs(item, f"{path}[{i}]"))
+        return jobs
 
     try:
         if args.enable_file_context and not all_translations_cached:
@@ -1940,9 +2289,10 @@ def traduci_testo_json(input_file, output_file, args):
             console.print(
                 f"  Tutte le traduzioni per '{file_basename}' sono già in cache. Salto la generazione del contesto.")
 
-        current_file_total_entries = len([text for text in all_texts_in_file if determine_if_translatable(text)])
+        jobs = _collect_json_jobs(data)
+        current_file_total_entries = len(jobs)
 
-        is_cached_list = [is_text_in_cache(t, args) for t in all_texts_in_file if determine_if_translatable(t)]
+        is_cached_list = [is_text_in_cache(job[2], args) for job in jobs]
 
         if max_entries_limit is not None and max_entries_limit > 0 and current_file_total_entries > max_entries_limit:
             console.print(
@@ -1960,17 +2310,64 @@ def traduci_testo_json(input_file, output_file, args):
                 TextColumn("• {task.completed}/{task.total} •"),
                 TimeElapsedColumn(), "•", SmartTimeRemainingColumn(is_cached_list, args.rpm),
                 console=console
-        ) as progress_instance:
-            progress = progress_instance
+        ) as progress:
             task = progress.add_task(f"[cyan]JSON '{file_basename}'[/]", total=current_file_total_entries)
 
-            _translate_recursive(data, context_window=dynamic_context_window)
+            batch_size = max(1, min(getattr(args, 'batch_size', 10), 15))
+            for chunk_start in range(0, len(jobs), batch_size):
+                chunk = jobs[chunk_start : chunk_start + batch_size]
+                
+                try:
+                    check_signals()
+                except SkipFileException:
+                    console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
+                    return
+                except StopProcessingException:
+                    raise
+
+                batch_items = [{"text": job[2]} for job in chunk]
+                
+                first_path = chunk[0][3]
+                last_path = chunk[-1][3]
+                if len(chunk) > 1:
+                    keys_range_str = f"{first_path[:20]}... a {last_path[:20]}..."
+                else:
+                    keys_range_str = first_path[:30]
+
+                progress.update(task, description=f"[cyan]JSON '{file_basename}'[/] | Chiavi: {keys_range_str}")
+                context_log = f"JSON '{file_basename}' | Chiavi: {keys_range_str}"
+
+                context_parts = []
+                if current_file_context:
+                    context_parts.append(f"Contesto generale del file: '{current_file_context}'")
+                if args.context_window > 0 and dynamic_context_window:
+                    context_lines = [f"Ecco le {len(dynamic_context_window)} traduzioni più recenti. Usale per coerenza:"]
+                    for src, trans in dynamic_context_window:
+                        context_lines.append(f'- "{src}" -> "{trans}"')
+                    context_parts.append("\n".join(context_lines))
+                    
+                final_dynamic_context = "\n".join(context_parts) if context_parts else None
+
+                translated_values = get_translations_batch(batch_items, context_log, args, dynamic_context=final_dynamic_context)
+
+                for job, orig_value, translated_value in zip(chunk, [job[2] for job in chunk], translated_values):
+                    parent_obj, key, _, _ = job
+                    parent_obj[key] = translated_value
+                    if args.translation_only_output:
+                        translated_texts_for_only_output.append(translated_value)
+                    
+                    if args.context_window > 0:
+                        dynamic_context_window.append((orig_value, translated_value))
+                    
+                    total_entries_translated += 1
+                    current_file_processed_entries += 1
+                    progress.advance(task)
 
     except SkipFileException:
         console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
         return
     except StopProcessingException:
-        raise # Rilancia per fermare tutto
+        raise
     except KeyboardInterrupt:
         with command_lock:
             is_skip_command = user_command_skip_file
@@ -2084,23 +2481,29 @@ def traduci_testo_csv(input_file, output_file, args):
         ) as progress:
             task = progress.add_task(f"[cyan]CSV '{file_basename}'[/]", total=current_file_total_entries)
 
-            for i in rows_to_translate_indices:
-                row = output_data_rows[i]
-                display_row_num = i + (2 if header else 1)
-
-                # --- MODIFICA: Controllo segnali (Stop/Skip) ---
+            batch_size = max(1, min(getattr(args, 'batch_size', 10), 15))
+            for chunk_start in range(0, len(rows_to_translate_indices), batch_size):
+                chunk_indices = rows_to_translate_indices[chunk_start : chunk_start + batch_size]
+                
                 try:
                     check_signals()
                 except SkipFileException:
                     console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
-                    return # Esce dalla funzione
+                    return
                 except StopProcessingException:
-                    raise # Rilancia per fermare tutto
-                # -----------------------------------------------
+                    raise
 
-                original_text = row[args.translate_col]
-                progress.update(task, description=f"[cyan]CSV '{file_basename}'[/] | Riga {display_row_num}")
-                context_log = f"CSV '{file_basename}' | Riga {display_row_num}"
+                chunk_texts = [output_data_rows[i][args.translate_col] for i in chunk_indices]
+                
+                first_row_num = chunk_indices[0] + (2 if header else 1)
+                last_row_num = chunk_indices[-1] + (2 if header else 1)
+                if len(chunk_indices) > 1:
+                    row_range_str = f"{first_row_num}-{last_row_num}"
+                else:
+                    row_range_str = str(first_row_num)
+
+                progress.update(task, description=f"[cyan]CSV '{file_basename}'[/] | Riga/e {row_range_str}")
+                context_log = f"CSV '{file_basename}' | Riga/e {row_range_str}"
 
                 context_parts = []
                 if current_file_context:
@@ -2112,20 +2515,23 @@ def traduci_testo_csv(input_file, output_file, args):
                         context_lines.append(f'- "{src}" -> "{trans}"')
                     context_parts.append("\n".join(context_lines))
 
-                final_dynamic_context = "\n".join(context_parts)
+                final_dynamic_context = "\n".join(context_parts) if context_parts else None
 
-                translated_text = get_translation_from_api(original_text, context_log, args,
-                                                           dynamic_context=final_dynamic_context)
+                batch_items = [{"text": txt} for txt in chunk_texts]
+                translated_texts = get_translations_batch(batch_items, context_log, args, dynamic_context=final_dynamic_context)
 
-                if args.context_window > 0:
-                    dynamic_context_window.append((original_text, translated_text))
+                for i, orig_text, trans_text in zip(chunk_indices, chunk_texts, translated_texts):
+                    row = output_data_rows[i]
+                    if args.context_window > 0:
+                        dynamic_context_window.append((orig_text, trans_text))
 
-                while len(row) <= args.output_col: row.append('')
-                row[args.output_col] = translated_text
-                if args.translation_only_output: translated_texts_for_only_output.append(translated_text)
-                progress.advance(task)
-                total_entries_translated += 1
-                current_file_processed_entries += 1
+                    while len(row) <= args.output_col: row.append('')
+                    row[args.output_col] = trans_text
+                    if args.translation_only_output:
+                        translated_texts_for_only_output.append(trans_text)
+                    progress.advance(task)
+                    total_entries_translated += 1
+                    current_file_processed_entries += 1
 
     except KeyboardInterrupt:
         with command_lock:
@@ -2210,42 +2616,53 @@ def traduci_testo_xlsx(input_file, output_file, args):
     ) as progress:
         task = progress.add_task(f"[cyan]XLSX '{file_basename}'[/]", total=current_file_total_entries)
 
-        for row, sc, tc in tasks_to_process:
-            # --- MODIFICA: Controllo segnali (Stop/Skip) ---
+        batch_size = max(1, min(getattr(args, 'batch_size', 10), 15))
+        for chunk_start in range(0, len(tasks_to_process), batch_size):
+            chunk = tasks_to_process[chunk_start : chunk_start + batch_size]
+            
             try:
                 check_signals()
             except SkipFileException:
                 console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
-                return # Esce dalla funzione
+                return
             except StopProcessingException:
-                raise # Rilancia per fermare tutto
-            # -----------------------------------------------
+                raise
 
-            src_cell = row[src_col_idx - 1]
-            original_text = str(src_cell.value)
+            chunk_texts = [str(row[sc - 1].value) for row, sc, tc in chunk]
             
-            # Usa coordinate dirette per scrittura
-            tgt_cell = ws.cell(row=src_cell.row, column=tgt_col_idx)
+            first_cell = chunk[0][0][chunk[0][1] - 1]
+            last_cell = chunk[-1][0][chunk[-1][1] - 1]
+            first_row_num = first_cell.row
+            last_row_num = last_cell.row
+            
+            if len(chunk) > 1:
+                row_range_str = f"{first_row_num}-{last_row_num}"
+            else:
+                row_range_str = str(first_row_num)
 
-            progress.update(task, description=f"[cyan]XLSX[/] | Riga {src_cell.row}")
-            context_log = f"XLSX '{file_basename}' | Riga {src_cell.row}"
+            progress.update(task, description=f"[cyan]XLSX[/] | Riga/e {row_range_str}")
+            context_log = f"XLSX '{file_basename}' | Riga/e {row_range_str}"
 
-            # Context building (semplificato)
             context_parts = []
             if current_file_context: context_parts.append(f"Contesto: '{current_file_context}'")
             if args.context_window > 0 and dynamic_context_window:
                  context_parts.append("\n".join([f'- "{s}" -> "{t}"' for s, t in dynamic_context_window]))
-            final_dynamic_context = "\n".join(context_parts)
+            final_dynamic_context = "\n".join(context_parts) if context_parts else None
 
-            translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=final_dynamic_context)
+            batch_items = [{"text": txt} for txt in chunk_texts]
+            translated_texts = get_translations_batch(batch_items, context_log, args, dynamic_context=final_dynamic_context)
 
-            if args.context_window > 0:
-                dynamic_context_window.append((original_text, translated_text))
+            for (row, sc, tc), orig_text, trans_text in zip(chunk, chunk_texts, translated_texts):
+                src_cell = row[sc - 1]
+                tgt_cell = ws.cell(row=src_cell.row, column=tc)
+                tgt_cell.value = trans_text
+                
+                if args.context_window > 0:
+                    dynamic_context_window.append((orig_text, trans_text))
 
-            tgt_cell.value = translated_text
-            total_entries_translated += 1
-            current_file_processed_entries += 1
-            progress.advance(task)
+                total_entries_translated += 1
+                current_file_processed_entries += 1
+                progress.advance(task)
 
     try:
         wb.save(output_file)
@@ -2275,11 +2692,10 @@ def traduci_testo_srt(input_file, output_file, args):
     current_file_total_entries = len(matches)
     current_file_processed_entries = 0
     
-    new_content_parts = []
-    last_pos = 0
-    
     dynamic_context_window = deque(maxlen=args.context_window)
     is_cached_list = [is_text_in_cache(m.group(3).strip(), args) for m in matches]
+
+    translated_texts = [None] * len(matches)
 
     with Progress(
             SpinnerColumn(),
@@ -2292,48 +2708,60 @@ def traduci_testo_srt(input_file, output_file, args):
     ) as progress:
         task = progress.add_task(f"[cyan]SRT '{file_basename}'[/]", total=current_file_total_entries)
 
-        for match in matches:
-            # --- MODIFICA: Controllo segnali (Stop/Skip) ---
+        batch_size = max(1, min(getattr(args, 'batch_size', 10), 15))
+        for chunk_start in range(0, len(matches), batch_size):
+            chunk_indices = range(chunk_start, min(chunk_start + batch_size, len(matches)))
+            chunk_matches = [matches[i] for i in chunk_indices]
+            
             try:
                 check_signals()
             except SkipFileException:
                 console.print(f"⏭️  [yellow]SKIP FILE richiesto dall'utente.[/]")
-                return # Esce dalla funzione
+                for i in range(chunk_start, len(matches)):
+                    translated_texts[i] = matches[i].group(3).strip()
+                break
             except StopProcessingException:
-                raise # Rilancia per fermare tutto
-            # -----------------------------------------------
+                raise
 
-            # Aggiungi parte non matchata (es. newline tra blocchi)
-            new_content_parts.append(content[last_pos:match.start()])
+            chunk_texts = [m.group(3).strip() for m in chunk_matches]
             
-            seq_num = match.group(1)
-            timecode = match.group(2)
-            original_text = match.group(3).strip()
-            
-            progress.update(task, description=f"[cyan]SRT[/] | Seq {seq_num}")
-            context_log = f"SRT '{file_basename}' | Seq {seq_num}"
+            first_seq = chunk_matches[0].group(1)
+            last_seq = chunk_matches[-1].group(1)
+            if len(chunk_matches) > 1:
+                seq_range_str = f"{first_seq}-{last_seq}"
+            else:
+                seq_range_str = first_seq
 
-            # Context
+            progress.update(task, description=f"[cyan]SRT[/] | Seq {seq_range_str}")
+            context_log = f"SRT '{file_basename}' | Seq {seq_range_str}"
+
             context_parts = []
             if args.context_window > 0 and dynamic_context_window:
                  context_parts.append("\n".join([f'- "{s}" -> "{t}"' for s, t in dynamic_context_window]))
-            final_dynamic_context = "\n".join(context_parts)
+            final_dynamic_context = "\n".join(context_parts) if context_parts else None
 
-            if determine_if_translatable(original_text):
-                translated_text = get_translation_from_api(original_text, context_log, args, dynamic_context=final_dynamic_context)
-                if args.context_window > 0:
-                    dynamic_context_window.append((original_text, translated_text))
-                total_entries_translated += 1
-            else:
-                translated_text = original_text
+            batch_items = [{"text": txt} for txt in chunk_texts]
+            chunk_translations = get_translations_batch(batch_items, context_log, args, dynamic_context=final_dynamic_context)
 
-            # Ricostruisci blocco
-            new_block = f"{seq_num}\n{timecode}\n{translated_text}"
-            new_content_parts.append(new_block)
-            
-            last_pos = match.end()
-            current_file_processed_entries += 1
-            progress.advance(task)
+            for i, orig_text, trans_text in zip(chunk_indices, chunk_texts, chunk_translations):
+                translated_texts[i] = trans_text
+                if determine_if_translatable(orig_text):
+                    if args.context_window > 0:
+                        dynamic_context_window.append((orig_text, trans_text))
+                    total_entries_translated += 1
+                current_file_processed_entries += 1
+                progress.advance(task)
+
+    new_content_parts = []
+    last_pos = 0
+    for i, match in enumerate(matches):
+        new_content_parts.append(content[last_pos:match.start()])
+        seq_num = match.group(1)
+        timecode = match.group(2)
+        trans_text = translated_texts[i] if translated_texts[i] is not None else match.group(3).strip()
+        new_block = f"{seq_num}\n{timecode}\n{trans_text}"
+        new_content_parts.append(new_block)
+        last_pos = match.end()
 
     new_content_parts.append(content[last_pos:]) # Coda file
     
@@ -2394,8 +2822,120 @@ def translate_file_via_upload(input_file, output_file, args):
             console.print(f"  [dim]🗑️  File eliminato in sicurezza dai server Gemini.[/]")
         except: pass
 
+def estimate_file_characters(file_path, file_type, encoding, args):
+    if file_type == 'xlsx':
+        if not openpyxl: return 0
+        try:
+            wb = openpyxl.load_workbook(file_path, read_only=True)
+            ws = wb.active
+            # Converti lettere colonna in indici 1-based
+            try:
+                src_cols_str = [c.strip() for c in str(args.xlsx_source_col).split(',') if c.strip()]
+                src_col_indices = [openpyxl.utils.column_index_from_string(c) for c in src_cols_str]
+            except:
+                src_col_indices = [1]
+            chars = 0
+            for row in ws.iter_rows(min_row=1):
+                for sc in src_col_indices:
+                    if len(row) >= sc:
+                        cell = row[sc - 1]
+                        if cell.value and determine_if_translatable(str(cell.value)):
+                            chars += len(str(cell.value))
+            return chars
+        except:
+            return 0
+    elif file_type == 'po':
+        if not polib: return 0
+        try:
+            po = polib.pofile(file_path, encoding=encoding)
+            chars = 0
+            for entry in po:
+                if entry.msgid and determine_if_translatable(entry.msgid):
+                    chars += len(entry.msgid)
+                if entry.msgctxt and should_translate_msgctxt(entry.msgctxt):
+                    chars += len(entry.msgctxt)
+            return chars
+        except:
+            return 0
+    elif file_type == 'json':
+        try:
+            with open(file_path, 'r', encoding=encoding) as fp:
+                data = json.load(fp)
+            keys_to_translate = {k.strip() for k in args.json_keys.split(',')} if args.json_keys else set()
+            sample_list = []
+            _extract_json_sample_texts(data, keys_to_translate, sample_list, match_full=args.match_full_json_path, limit=None)
+            return sum(len(text) for text in sample_list)
+        except:
+            return 0
+    elif file_type == 'csv':
+        try:
+            with open(file_path, 'r', encoding=encoding, newline='') as fp:
+                rows = list(csv.reader(fp, delimiter=args.delimiter))
+            chars = 0
+            data_rows = rows[1:] if rows else []
+            for row in data_rows:
+                if len(row) > args.translate_col:
+                    val = row[args.translate_col]
+                    if determine_if_translatable(val):
+                        chars += len(val)
+            return chars
+        except:
+            return 0
+    else: # e.g. srt o altro
+        try:
+            with open(file_path, 'r', encoding=encoding, errors='ignore') as fp:
+                content = fp.read()
+            if file_type == 'srt':
+                pattern = re.compile(r'\d+\s*\n\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}\s*\n(.*?)(?=\n\s*\n|\Z)', re.DOTALL)
+                matches = pattern.finditer(content)
+                chars = 0
+                for m in matches:
+                    txt = m.group(1).strip()
+                    if determine_if_translatable(txt):
+                        chars += len(txt)
+                return chars
+            return len(content)
+        except:
+            return 0
+
+
+def get_lang_expansion_factor(source_lang, target_lang):
+    s = source_lang.lower().strip()
+    t = target_lang.lower().strip()
+    
+    # Mappa delle lingue principali in italiano ed inglese
+    latin_expansion_langs = {"italiano", "italian", "spagnolo", "spanish", "francese", "french", "portoghese", "portuguese"}
+    german_expansion_langs = {"tedesco", "german"}
+    english_langs = {"inglese", "english"}
+    
+    # Valore di default prudenziale (molte lingue sono il 15% più lunghe dell'inglese)
+    factor = 1.15
+    
+    if t in english_langs:
+        if s in latin_expansion_langs:
+            factor = 0.85
+        elif s in german_expansion_langs:
+            factor = 0.80
+        else:
+            factor = 1.0
+    elif t in latin_expansion_langs:
+        if s in english_langs:
+            factor = 1.20
+        else:
+            factor = 1.0
+    elif t in german_expansion_langs:
+        if s in english_langs:
+            factor = 1.30
+        else:
+            factor = 1.0
+            
+    return factor
+
+
 def process_files_recursively(args):
-    global user_command_skip_file, total_files_translated, current_file_total_entries, current_file_processed_entries
+    global user_command_skip_file, total_files_translated, current_file_total_entries, current_file_processed_entries, max_entries_limit
+    if hasattr(args, 'max_entries') and args.max_entries is not None:
+        max_entries_limit = args.max_entries
     base_input_dir = os.path.abspath(args.input)
     base_output_dir = f"{base_input_dir}_tradotto" if os.path.basename(base_input_dir) != "input" else os.path.join(
         os.path.dirname(base_input_dir) or '.', "tradotto")
@@ -2419,26 +2959,30 @@ def process_files_recursively(args):
                 if f.endswith(f'.{args.file_type}'):
                     file_count += 1
                     try:
-                        with open(os.path.join(root, f), 'r', encoding=args.encoding, errors='ignore') as fp:
-                            total_chars += len(fp.read())
+                        total_chars += estimate_file_characters(os.path.join(root, f), args.file_type, args.encoding, args)
                     except: pass
         
+        factor = get_lang_expansion_factor(args.source_lang, args.target_lang)
         est_tokens = int(total_chars / ESTIMATED_CHARS_PER_TOKEN)
+        est_output_tokens = int(est_tokens * factor)
         
         # Calcolo dinamico del costo
-        model_price = {"input": 0.10, "output": 0.40} # Default gemini-2.0-flash
+        model_price = {"input": 0.30, "output": 2.50} # Default gemini-2.5-flash
         clean_model_name = args.model_name.lower().replace("-preview", "").replace("-experimental", "")
         for k in sorted(PRICING_TABLE.keys(), key=len, reverse=True):
             if k in clean_model_name:
                 model_price = PRICING_TABLE[k]
                 break
                 
-        est_cost = (est_tokens / 1_000_000) * model_price["input"]
+        # Costo stimato per input + output con coefficiente di espansione linguistica
+        est_cost = ((est_tokens / 1_000_000) * model_price["input"]) + ((est_output_tokens / 1_000_000) * model_price["output"])
         
         report = (
             f"File Trovati: {file_count}\n"
             f"Caratteri Totali: {total_chars:,}\n"
-            f"Token Stimati (Input): {est_tokens:,}\n"
+            f"Coefficiente Espansione (Output): {factor:.2f}x\n"
+            f"Token Stimati (Input / Output): {est_tokens:,} / {est_output_tokens:,}\n"
+            f"Token Totali Stimati: {est_tokens + est_output_tokens:,}\n"
             f"Costo Stimato ({args.model_name}): ~${est_cost:.4f}"
         )
         
@@ -2447,7 +2991,10 @@ def process_files_recursively(args):
         table.add_column("Valore Stimato", style="bold white")
         table.add_row("File Trovati", str(file_count))
         table.add_row("Caratteri Totali", f"{total_chars:,}")
-        table.add_row("Token Stimati (Input)", f"{est_tokens:,}")
+        table.add_row("Coefficiente Espansione (Output)", f"{factor:.2f}x")
+        table.add_row("Token Input Stimati", f"{est_tokens:,}")
+        table.add_row("Token Output Stimati", f"{est_output_tokens:,}")
+        table.add_row("Token Totali Stimati", f"{est_tokens + est_output_tokens:,}")
         table.add_row(f"Costo Stimato ({args.model_name})", f"~${est_cost:.4f}")
         console.print(table)
         
@@ -2691,10 +3238,13 @@ def run_core_process(args, log_queue, stop_event, pause_event, skip_event):
     global total_paused_time, pause_start_timestamp, final_elapsed_time
     
     # Reset stato
+    if hasattr(args, 'batch_size'):
+        args.batch_size = max(1, min(args.batch_size, 15))
     script_args = args
     gui_log_queue = log_queue
     graceful_exit_requested = stop_event
     script_is_paused = pause_event # Nota: nella GUI pause_event è set() quando running, clear() quando pausa.
+    global_skip_event = skip_event
     # AlumenCore usa script_is_paused.wait() che blocca se clear. Quindi la logica è compatibile.
     
     # Setup iniziale
